@@ -50,7 +50,7 @@ class AgentLoop:
         self.temperature = temperature
         self.max_tokens = max_tokens
 
-    async def process_stream(self, session_id: str, user_content: str):
+    async def process_stream(self, session_id: str, user_content: str, model: str | None = None):
         """
         处理用户消息，以异步生成器方式 yield 事件字典。
 
@@ -66,6 +66,8 @@ class AgentLoop:
         messages = await self.context.build_messages(history, user_content, session_id)
         tool_defs = self.tools.get_definitions()
 
+        effective_model = model or self.model  # model 参数允许任务级临时覆盖
+
         new_messages: list[dict] = []
         final_content: str | None = None
 
@@ -77,7 +79,7 @@ class AgentLoop:
                 async for event in self.provider.chat_stream(
                     messages=messages,
                     tools=tool_defs if tool_defs else None,
-                    model=self.model,
+                    model=effective_model,
                     temperature=self.temperature,
                     max_tokens=self.max_tokens,
                 ):

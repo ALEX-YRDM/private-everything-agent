@@ -30,6 +30,9 @@ dependencies = [
     # Skills
     "pyyaml>=6.0.2",
 
+    # 定时任务
+    "apscheduler>=3.10.0,<4.0",
+
     # 日志
     "loguru>=0.7.0",
 ]

@@ -3,6 +3,103 @@ from pydantic import BaseModel
 
 router = APIRouter()
 
+# ── Provider API Keys 相关 ──────────────────────────────────────────────────
+
+
+class ProviderKeyUpsert(BaseModel):
+    provider: str
+    display_name: str
+    api_key: str | None = None
+    api_base: str | None = None
+
+
+# ── 模型配置相关（简化版：无需每条单独存 API Key）─────────────────────────
+
+
+class ModelConfigCreate(BaseModel):
+    name: str
+    model_id: str
+    temperature: float = 0.1
+    max_tokens: int = 4096
+
+
+class ModelConfigUpdate(BaseModel):
+    name: str | None = None
+    model_id: str | None = None
+    temperature: float | None = None
+    max_tokens: int | None = None
+    enabled: bool | None = None
+
+
+# ── 定时任务相关 ────────────────────────────────────────────────────────────
+
+
+class TaskCreate(BaseModel):
+    name: str
+    cron_expr: str
+    prompt: str
+    model_id: str | None = None
+
+
+class TaskUpdate(BaseModel):
+    name: str | None = None
+    cron_expr: str | None = None
+    prompt: str | None = None
+    model_id: str | None = None
+    enabled: bool | None = None
+
+
+# ── Provider API Keys 接口 ──────────────────────────────────────────────────
+
+
+@router.get("/provider-keys")
+async def list_provider_keys(request: Request):
+    """列出所有已保存的 Provider API Key 配置。"""
+    db = request.app.state.agent.memory.db
+    keys = await db.list_provider_keys()
+    # 返回时隐藏 key 的中间部分
+    result = []
+    for k in keys:
+        masked = _mask_key(k.get("api_key") or "")
+        result.append({**k, "api_key_masked": masked, "api_key": masked if masked else None})
+    return {"keys": result}
+
+
+@router.post("/provider-keys")
+async def upsert_provider_key(request: Request, body: ProviderKeyUpsert):
+    """新增或更新 Provider API Key（同一 provider 只保存一条）。"""
+    from ..providers.key_manager import apply_provider_key
+    db = request.app.state.agent.memory.db
+    row = await db.upsert_provider_key(
+        provider=body.provider,
+        display_name=body.display_name,
+        api_key=body.api_key or None,
+        api_base=body.api_base or None,
+    )
+    # 立即生效
+    apply_provider_key(body.provider, body.api_key or None, body.api_base or None)
+    return {"ok": True, "row": row}
+
+
+@router.delete("/provider-keys/{provider}")
+async def delete_provider_key(request: Request, provider: str):
+    """删除指定 Provider 的 Key。"""
+    db = request.app.state.agent.memory.db
+    ok = await db.delete_provider_key(provider)
+    if not ok:
+        raise HTTPException(status_code=404, detail="未找到该 Provider 配置")
+    return {"ok": True}
+
+
+def _mask_key(key: str) -> str:
+    """返回脱敏后的 key（保留前4位和后4位）。"""
+    if not key or len(key) < 10:
+        return "***" if key else ""
+    return key[:4] + "****" + key[-4:]
+
+
+# ── Session 相关 ─────────────────────────────────────────────────────────────
+
 
 class CreateSessionRequest(BaseModel):
     title: str = "新会话"
@@ -114,3 +211,191 @@ async def update_model(request: Request, body: dict):
         raise HTTPException(status_code=400, detail="缺少 model 参数")
     agent.model = model
     return {"ok": True, "model": model}
+
+
+# ── 模型配置接口 ────────────────────────────────────────────────────────────
+
+
+@router.get("/model-configs")
+async def list_model_configs(request: Request):
+    """列出所有已保存的模型配置。"""
+    db = request.app.state.agent.memory.db
+    configs = await db.list_model_configs()
+    # 隐藏 api_key 明文（仅显示前4位）
+    for c in configs:
+        if c.get("api_key"):
+            c["api_key_masked"] = c["api_key"][:4] + "****"
+        else:
+            c["api_key_masked"] = None
+        c.pop("api_key", None)
+    return {"configs": configs}
+
+
+@router.post("/model-configs")
+async def create_model_config(request: Request, body: ModelConfigCreate):
+    """创建新的模型配置。"""
+    db = request.app.state.agent.memory.db
+    config = await db.create_model_config(
+        name=body.name,
+        model_id=body.model_id,
+        api_key=body.api_key,
+        api_base=body.api_base,
+        temperature=body.temperature,
+        max_tokens=body.max_tokens,
+    )
+    return config
+
+
+@router.put("/model-configs/{config_id}")
+async def update_model_config(request: Request, config_id: int, body: ModelConfigUpdate):
+    """更新模型配置。"""
+    db = request.app.state.agent.memory.db
+    updates = body.model_dump(exclude_none=True)
+    if "enabled" in updates:
+        updates["enabled"] = 1 if updates["enabled"] else 0
+    config = await db.update_model_config(config_id, **updates)
+    if not config:
+        raise HTTPException(status_code=404, detail="配置不存在")
+    return config
+
+
+@router.delete("/model-configs/{config_id}")
+async def delete_model_config(request: Request, config_id: int):
+    """删除模型配置。"""
+    db = request.app.state.agent.memory.db
+    ok = await db.delete_model_config(config_id)
+    if not ok:
+        raise HTTPException(status_code=404, detail="配置不存在")
+    return {"ok": True}
+
+
+@router.post("/model-configs/{config_id}/activate")
+async def activate_model_config(request: Request, config_id: int):
+    """将指定配置设为默认并立即应用到 Agent（API Key 从 provider_keys 自动获取）。"""
+    from ..providers.key_manager import extract_provider
+    db = request.app.state.agent.memory.db
+    config = await db.get_model_config(config_id)
+    if not config:
+        raise HTTPException(status_code=404, detail="配置不存在")
+
+    await db.set_default_model_config(config_id)
+
+    agent = request.app.state.agent
+    agent.model = config["model_id"]
+    agent.temperature = config["temperature"]
+    agent.max_tokens = config["max_tokens"]
+
+    # 从 provider_keys 自动查找该模型对应的 API Key
+    provider = extract_provider(config["model_id"])
+    pk = await db.get_provider_key(provider)
+    if pk:
+        from ..providers.key_manager import apply_provider_key
+        apply_provider_key(provider, pk.get("api_key"), pk.get("api_base"))
+
+    return {"ok": True, "active_model": config["model_id"]}
+
+
+@router.post("/models/switch")
+async def switch_model(request: Request):
+    """直接切换当前模型（全局生效，影响所有会话和定时任务）。"""
+    from ..providers.key_manager import extract_provider
+    body = await request.json()
+    model_id = body.get("model_id")
+    if not model_id:
+        raise HTTPException(status_code=400, detail="缺少 model_id")
+
+    agent = request.app.state.agent
+    agent.model = model_id
+
+    # 查找并应用对应 provider 的 Key
+    db = agent.memory.db
+    provider = extract_provider(model_id)
+    pk = await db.get_provider_key(provider)
+    if pk:
+        from ..providers.key_manager import apply_provider_key
+        apply_provider_key(provider, pk.get("api_key"), pk.get("api_base"))
+
+    return {"ok": True, "active_model": model_id, "provider": provider}
+
+
+# ── 定时任务接口 ────────────────────────────────────────────────────────────
+
+
+@router.get("/tasks")
+async def list_tasks(request: Request):
+    """列出所有定时任务。"""
+    db = request.app.state.agent.memory.db
+    tasks = await db.list_tasks()
+    return {"tasks": tasks}
+
+
+@router.post("/tasks")
+async def create_task(request: Request, body: TaskCreate):
+    """创建定时任务。"""
+    _validate_cron(body.cron_expr)
+    db = request.app.state.agent.memory.db
+    task = await db.create_task(
+        name=body.name,
+        cron_expr=body.cron_expr,
+        prompt=body.prompt,
+        model_id=body.model_id,
+    )
+    # 注册到调度器
+    scheduler = request.app.state.scheduler
+    if scheduler:
+        scheduler.add_task(task)
+    return task
+
+
+@router.put("/tasks/{task_id}")
+async def update_task(request: Request, task_id: int, body: TaskUpdate):
+    """更新定时任务。"""
+    db = request.app.state.agent.memory.db
+    updates = body.model_dump(exclude_none=True)
+    if "cron_expr" in updates:
+        _validate_cron(updates["cron_expr"])
+    if "enabled" in updates:
+        updates["enabled"] = 1 if updates["enabled"] else 0
+    task = await db.update_task(task_id, **updates)
+    if not task:
+        raise HTTPException(status_code=404, detail="任务不存在")
+    # 重新调度
+    scheduler = request.app.state.scheduler
+    if scheduler:
+        scheduler.reschedule_task(task)
+    return task
+
+
+@router.delete("/tasks/{task_id}")
+async def delete_task(request: Request, task_id: int):
+    """删除定时任务。"""
+    db = request.app.state.agent.memory.db
+    scheduler = request.app.state.scheduler
+    if scheduler:
+        scheduler.remove_task(task_id)
+    ok = await db.delete_task(task_id)
+    if not ok:
+        raise HTTPException(status_code=404, detail="任务不存在")
+    return {"ok": True}
+
+
+@router.post("/tasks/{task_id}/run")
+async def run_task_now(request: Request, task_id: int):
+    """立即手动触发一次定时任务。"""
+    db = request.app.state.agent.memory.db
+    task = await db.get_task(task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail="任务不存在")
+    scheduler = request.app.state.scheduler
+    if scheduler:
+        import asyncio
+        asyncio.create_task(scheduler.run_task(task))
+    return {"ok": True, "message": "任务已触发，结果将保存到对应会话"}
+
+
+def _validate_cron(expr: str):
+    """验证调度表达式（支持5字段cron和@every格式）。"""
+    from ..scheduler import validate_expr
+    err = validate_expr(expr)
+    if err:
+        raise HTTPException(status_code=400, detail=err)

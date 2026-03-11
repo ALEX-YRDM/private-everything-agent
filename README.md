@@ -1,4 +1,4 @@
-# My Agent
+# Private EveryThing Agent
 
 基于 Python FastAPI + Vue 3 的本地个人 Agent 系统。
 

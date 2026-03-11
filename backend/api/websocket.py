@@ -1,7 +1,7 @@
 import asyncio
-import json
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from loguru import logger
+from .connection_manager import manager
 
 router = APIRouter()
 
@@ -15,15 +15,19 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
     {"type": "message", "content": "用户消息"}
     {"type": "stop"}                             # 中断当前任务
 
-    服务端 → 客户端：
+    服务端 → 客户端（会话级）：
     {"type": "thinking", "content": "..."}       # LLM 推理过程
     {"type": "tool_call", "name": "...", "args": {...}}
     {"type": "tool_result", "name": "...", "content": "..."}
     {"type": "content_delta", "content": "..."}  # 流式 token
     {"type": "done", "content": "..."}           # 完成
     {"type": "error", "message": "..."}          # 错误
+
+    服务端 → 客户端（全局广播）：
+    {"type": "task_notification", "task_id": ..., "task_name": "...",
+     "status": "success"|"error", "session_id": "...", "message": "..."}
     """
-    await websocket.accept()
+    await manager.connect(websocket)
     agent = websocket.app.state.agent
     current_task: asyncio.Task | None = None
 
@@ -60,10 +64,12 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
                 current_task = asyncio.create_task(stream_response(data["content"]))
 
     except WebSocketDisconnect:
+        manager.disconnect(websocket)
         logger.info(f"会话 {session_id} WebSocket 断开")
         if current_task:
             current_task.cancel()
     except Exception as e:
+        manager.disconnect(websocket)
         logger.exception(f"WebSocket 处理出错: {e}")
         if current_task:
             current_task.cancel()

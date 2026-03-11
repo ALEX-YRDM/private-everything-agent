@@ -37,6 +37,40 @@ export interface ModelInfo {
   provider: string
 }
 
+export interface ModelConfig {
+  id: number
+  name: string
+  model_id: string
+  temperature: number
+  max_tokens: number
+  is_default: number
+  enabled: number
+  created_at: string
+}
+
+export interface ProviderKey {
+  id: number
+  provider: string
+  display_name: string
+  api_key: string | null
+  api_key_masked: string | null
+  api_base: string | null
+  updated_at: string
+}
+
+export interface ScheduledTask {
+  id: number
+  name: string
+  cron_expr: string
+  prompt: string
+  model_id: string | null
+  enabled: number
+  last_run_at: string | null
+  last_status: string | null
+  session_id: string | null
+  created_at: string
+}
+
 export const api = {
   sessions: {
     list: () => request<{ sessions: Session[] }>('/api/sessions'),
@@ -57,6 +91,11 @@ export const api = {
   },
   models: {
     list: () => request<{ models: ModelInfo[] }>('/api/models'),
+    switch: (model_id: string) =>
+      request<{ ok: boolean; active_model: string; provider: string }>('/api/models/switch', {
+        method: 'POST',
+        body: JSON.stringify({ model_id }),
+      }),
   },
   tools: {
     list: () => request<{ tools: string[] }>('/api/tools'),
@@ -68,5 +107,37 @@ export const api = {
         method: 'PUT',
         body: JSON.stringify({ model }),
       }),
+  },
+  providerKeys: {
+    list: () => request<{ keys: ProviderKey[] }>('/api/provider-keys'),
+    upsert: (data: { provider: string; display_name: string; api_key?: string; api_base?: string }) =>
+      request<{ ok: boolean; row: ProviderKey }>('/api/provider-keys', {
+        method: 'POST',
+        body: JSON.stringify(data),
+      }),
+    delete: (provider: string) =>
+      request<{ ok: boolean }>(`/api/provider-keys/${provider}`, { method: 'DELETE' }),
+  },
+  modelConfigs: {
+    list: () => request<{ configs: ModelConfig[] }>('/api/model-configs'),
+    create: (data: { name: string; model_id: string; temperature?: number; max_tokens?: number }) =>
+      request<ModelConfig>('/api/model-configs', { method: 'POST', body: JSON.stringify(data) }),
+    update: (id: number, data: Partial<ModelConfig>) =>
+      request<ModelConfig>(`/api/model-configs/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
+    delete: (id: number) =>
+      request<{ ok: boolean }>(`/api/model-configs/${id}`, { method: 'DELETE' }),
+    activate: (id: number) =>
+      request<{ ok: boolean; active_model: string }>(`/api/model-configs/${id}/activate`, { method: 'POST' }),
+  },
+  tasks: {
+    list: () => request<{ tasks: ScheduledTask[] }>('/api/tasks'),
+    create: (data: { name: string; cron_expr: string; prompt: string; model_id?: string }) =>
+      request<ScheduledTask>('/api/tasks', { method: 'POST', body: JSON.stringify(data) }),
+    update: (id: number, data: Partial<ScheduledTask>) =>
+      request<ScheduledTask>(`/api/tasks/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
+    delete: (id: number) =>
+      request<{ ok: boolean }>(`/api/tasks/${id}`, { method: 'DELETE' }),
+    runNow: (id: number) =>
+      request<{ ok: boolean; message: string }>(`/api/tasks/${id}/run`, { method: 'POST' }),
   },
 }

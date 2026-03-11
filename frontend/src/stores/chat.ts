@@ -20,6 +20,8 @@ export interface ToolCallDisplay {
   args: Record<string, unknown>
 }
 
+const TASK_TOOLS = new Set(['create_task', 'delete_task', 'update_task'])
+
 export const useChatStore = defineStore('chat', () => {
   const sessions = ref<Session[]>([])
   const currentSessionId = ref<string | null>(null)
@@ -27,6 +29,11 @@ export const useChatStore = defineStore('chat', () => {
   const isStreaming = ref(false)
   const streamingMessage = ref<DisplayMessage | null>(null)
   const wsMap = new Map<string, AgentWebSocket>()
+
+  /** 每当任务工具执行完毕，此计数器 +1，供 SchedulerPanel 监听刷新。 */
+  const tasksChangedAt = ref(0)
+  /** 最近一次收到的定时任务广播通知（App.vue 监听并显示 toast）。 */
+  const lastTaskNotification = ref<{ task_name: string; status: string; message: string } | null>(null)
 
   const currentSession = computed(() =>
     sessions.value.find((s) => s.id === currentSessionId.value) || null
@@ -206,6 +213,10 @@ export const useChatStore = defineStore('chat', () => {
           streamingMessage.value.toolResults![tc.id] = event.content
         }
       }
+      // 任务工具执行完毕 → 通知 SchedulerPanel 刷新
+      if (TASK_TOOLS.has(event.name)) {
+        tasksChangedAt.value++
+      }
     } else if (event.type === 'done') {
       if (streamingMessage.value) {
         streamingMessage.value.isStreaming = false
@@ -220,6 +231,11 @@ export const useChatStore = defineStore('chat', () => {
       isStreaming.value = false
       streamingMessage.value = null
       console.error('Agent 错误:', event.message)
+    } else if (event.type === 'task_notification') {
+      // 定时任务完成通知：触发 SchedulerPanel 刷新
+      tasksChangedAt.value++
+      // 将通知暴露给外部（App.vue 用于显示 toast）
+      lastTaskNotification.value = event
     }
   }
 
@@ -278,6 +294,8 @@ export const useChatStore = defineStore('chat', () => {
     messages,
     isStreaming,
     streamingMessage,
+    tasksChangedAt,
+    lastTaskNotification,
     init,
     loadSessions,
     createSession,

@@ -32,7 +32,9 @@ async function sendMessage() {
 }
 
 function handleKeydown(e: KeyboardEvent) {
-  if (e.key === 'Enter' && !e.shiftKey) {
+  // e.isComposing 为 true 时表示 IME 正在组合输入（如中文输入法选字阶段）
+  // 此时按 Enter 是确认候选词，不应发送消息
+  if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) {
     e.preventDefault()
     sendMessage()
   }
