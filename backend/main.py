@@ -12,6 +12,173 @@ from .scheduler import AgentScheduler
 from .api.routes import router as api_router
 from .api.websocket import router as ws_router
 
+_DEFAULT_PROVIDERS = [
+    {
+        "provider": "openai",
+        "display_name": "OpenAI",
+        "api_base": None,
+        "models": [
+            {"id": "openai/o4-mini",       "label": "o4-mini"},
+            {"id": "openai/o3",            "label": "o3"},
+            {"id": "openai/o3-mini",       "label": "o3-mini"},
+            {"id": "openai/o1",            "label": "o1"},
+            {"id": "openai/o1-mini",       "label": "o1-mini"},
+            {"id": "openai/gpt-4.1",       "label": "GPT-4.1"},
+            {"id": "openai/gpt-4.1-mini",  "label": "GPT-4.1 mini"},
+            {"id": "openai/gpt-4o",        "label": "GPT-4o"},
+            {"id": "openai/gpt-4o-mini",   "label": "GPT-4o mini"},
+            {"id": "openai/gpt-4-turbo",   "label": "GPT-4 Turbo"},
+            {"id": "openai/gpt-3.5-turbo", "label": "GPT-3.5 Turbo"},
+        ],
+    },
+    {
+        "provider": "anthropic",
+        "display_name": "Anthropic",
+        "api_base": None,
+        "models": [
+            {"id": "anthropic/claude-opus-4-20250514",    "label": "Claude Opus 4"},
+            {"id": "anthropic/claude-sonnet-4-20250514",  "label": "Claude Sonnet 4"},
+            {"id": "anthropic/claude-3-7-sonnet-20250219","label": "Claude 3.7 Sonnet"},
+            {"id": "anthropic/claude-3-5-sonnet-20241022","label": "Claude 3.5 Sonnet"},
+            {"id": "anthropic/claude-3-5-haiku-20241022", "label": "Claude 3.5 Haiku"},
+        ],
+    },
+    {
+        "provider": "gemini",
+        "display_name": "Google Gemini",
+        "api_base": None,
+        "models": [
+            {"id": "gemini/gemini-2.5-pro-preview-05-06","label": "Gemini 2.5 Pro"},
+            {"id": "gemini/gemini-2.0-flash",            "label": "Gemini 2.0 Flash"},
+            {"id": "gemini/gemini-2.0-flash-lite",       "label": "Gemini 2.0 Flash Lite"},
+            {"id": "gemini/gemini-1.5-pro",              "label": "Gemini 1.5 Pro"},
+            {"id": "gemini/gemini-1.5-flash",            "label": "Gemini 1.5 Flash"},
+        ],
+    },
+    {
+        "provider": "deepseek",
+        "display_name": "DeepSeek",
+        "api_base": None,
+        "models": [
+            {"id": "deepseek/deepseek-chat",     "label": "DeepSeek Chat (V3)"},
+            {"id": "deepseek/deepseek-reasoner", "label": "DeepSeek Reasoner (R1)"},
+        ],
+    },
+    {
+        "provider": "xai",
+        "display_name": "xAI (Grok)",
+        "api_base": None,
+        "models": [
+            {"id": "xai/grok-3",      "label": "Grok 3"},
+            {"id": "xai/grok-3-mini", "label": "Grok 3 Mini"},
+            {"id": "xai/grok-2-1212", "label": "Grok 2"},
+        ],
+    },
+    {
+        "provider": "groq",
+        "display_name": "Groq",
+        "api_base": None,
+        "models": [
+            {"id": "groq/llama-3.3-70b-versatile",  "label": "Llama 3.3 70B"},
+            {"id": "groq/llama-3.1-8b-instant",     "label": "Llama 3.1 8B (fast)"},
+            {"id": "groq/mixtral-8x7b-32768",       "label": "Mixtral 8x7B"},
+            {"id": "groq/gemma2-9b-it",             "label": "Gemma2 9B"},
+            {"id": "groq/qwen-qwq-32b",             "label": "Qwen QwQ 32B"},
+        ],
+    },
+    {
+        "provider": "mistral",
+        "display_name": "Mistral AI",
+        "api_base": None,
+        "models": [
+            {"id": "mistral/mistral-large-latest", "label": "Mistral Large"},
+            {"id": "mistral/mistral-small-latest", "label": "Mistral Small"},
+            {"id": "mistral/codestral-latest",     "label": "Codestral"},
+            {"id": "mistral/mistral-nemo",         "label": "Mistral Nemo"},
+        ],
+    },
+    {
+        "provider": "together_ai",
+        "display_name": "Together AI",
+        "api_base": None,
+        "models": [
+            {"id": "together_ai/meta-llama/Llama-3.3-70B-Instruct-Turbo",     "label": "Llama 3.3 70B Turbo"},
+            {"id": "together_ai/meta-llama/Meta-Llama-3.1-8B-Instruct-Turbo", "label": "Llama 3.1 8B Turbo"},
+            {"id": "together_ai/Qwen/Qwen2.5-72B-Instruct-Turbo",             "label": "Qwen 2.5 72B Turbo"},
+            {"id": "together_ai/deepseek-ai/DeepSeek-R1",                     "label": "DeepSeek R1"},
+        ],
+    },
+    {
+        "provider": "openrouter",
+        "display_name": "OpenRouter",
+        "api_base": None,
+        "models": [
+            {"id": "openrouter/google/gemini-2.0-flash-001",       "label": "Gemini 2.0 Flash"},
+            {"id": "openrouter/anthropic/claude-3.5-sonnet",       "label": "Claude 3.5 Sonnet"},
+            {"id": "openrouter/meta-llama/llama-3.3-70b-instruct", "label": "Llama 3.3 70B"},
+            {"id": "openrouter/deepseek/deepseek-r1",              "label": "DeepSeek R1"},
+            {"id": "openrouter/qwen/qwq-32b",                      "label": "QwQ 32B"},
+        ],
+    },
+    {
+        "provider": "perplexity",
+        "display_name": "Perplexity",
+        "api_base": None,
+        "models": [
+            {"id": "perplexity/sonar-pro", "label": "Sonar Pro"},
+            {"id": "perplexity/sonar",     "label": "Sonar"},
+        ],
+    },
+    {
+        "provider": "ollama",
+        "display_name": "Ollama (本地)",
+        "api_base": "http://localhost:11434",
+        "models": [
+            {"id": "ollama/llama3.3",        "label": "Llama 3.3"},
+            {"id": "ollama/qwen2.5:72b",     "label": "Qwen 2.5 72B"},
+            {"id": "ollama/deepseek-r1:14b", "label": "DeepSeek R1 14B"},
+            {"id": "ollama/mistral",         "label": "Mistral"},
+        ],
+    },
+    {
+        "provider": "volcengine",
+        "display_name": "字节跳动 (火山引擎)",
+        "api_base": None,
+        "models": [
+            {"id": "volcengine/doubao-pro-32k",  "label": "Doubao Pro 32K"},
+            {"id": "volcengine/doubao-lite-32k", "label": "Doubao Lite 32K"},
+        ],
+    },
+    {
+        "provider": "moonshot",
+        "display_name": "月之暗面 (Kimi)",
+        "api_base": None,
+        "models": [
+            {"id": "moonshot/moonshot-v1-128k", "label": "Moonshot v1 128K"},
+            {"id": "moonshot/moonshot-v1-32k",  "label": "Moonshot v1 32K"},
+        ],
+    },
+]
+
+
+async def _seed_default_providers(db) -> None:
+    """首次启动时写入内置 Provider + 模型列表（跳过已存在的 provider）。"""
+    existing = {row["provider"] for row in await db.list_provider_keys()}
+    seeded = 0
+    for p in _DEFAULT_PROVIDERS:
+        if p["provider"] not in existing:
+            await db.upsert_provider_key(
+                provider=p["provider"],
+                display_name=p["display_name"],
+                api_key=None,
+                api_base=p.get("api_base"),
+                models=p["models"],
+            )
+            seeded += 1
+    if seeded:
+        logger.info(f"已种子注入 {seeded} 个默认 Provider 配置")
+
+
 _BUILTIN_TEMPLATES = [
     {"name": "代码审查", "category": "编程",
      "content": "请对以下代码进行审查，分析：\n1. 代码逻辑正确性\n2. 潜在 bug\n3. 性能问题\n4. 可读性与可维护性\n5. 最佳实践\n\n```\n[粘贴代码]\n```"},
@@ -102,6 +269,9 @@ async def lifespan(app: FastAPI):
     existing = await db.list_templates()
     if not existing:
         await _seed_builtin_templates(db)
+
+    # 首次启动种子注入默认 Provider + 模型列表
+    await _seed_default_providers(db)
 
     app.state.agent = agent
     app.state.config = config

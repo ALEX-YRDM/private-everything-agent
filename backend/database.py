@@ -83,13 +83,14 @@ async def init_db():
             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         );
 
-        -- Provider API 密钥表（每类服务商一个 Key）
+        -- Provider API 密钥表（每类服务商一个 Key，含模型列表）
         CREATE TABLE IF NOT EXISTS provider_keys (
             id           INTEGER PRIMARY KEY AUTOINCREMENT,
             provider     TEXT NOT NULL UNIQUE,
             display_name TEXT NOT NULL,
             api_key      TEXT,
             api_base     TEXT,
+            models       TEXT DEFAULT '[]',
             updated_at   TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         );
 
@@ -109,6 +110,15 @@ async def init_db():
         );
     """)
     await _db.commit()
+
+    # 迁移：旧库可能缺少 models 列
+    try:
+        await _db.execute("ALTER TABLE provider_keys ADD COLUMN models TEXT DEFAULT '[]'")
+        await _db.commit()
+        logger.info("已迁移 provider_keys 表：添加 models 列")
+    except Exception:
+        pass  # 列已存在，忽略
+
     logger.info(f"数据库初始化完成: {DB_PATH}")
 
 
@@ -267,30 +277,64 @@ class DBManager:
 
     # ── Provider API Keys ──────────────────────────────────────────────────
 
+    def _parse_provider_models(self, row: dict) -> dict:
+        """将 models JSON 字段反序列化为列表。"""
+        try:
+            row["models"] = json.loads(row.get("models") or "[]")
+        except Exception:
+            row["models"] = []
+        return row
+
     async def list_provider_keys(self) -> list[dict]:
-        return await self.fetch_all(
-            "SELECT * FROM provider_keys ORDER BY provider ASC"
-        )
+        rows = await self.fetch_all("SELECT * FROM provider_keys ORDER BY provider ASC")
+        return [self._parse_provider_models(r) for r in rows]
 
     async def get_provider_key(self, provider: str) -> dict | None:
-        return await self.fetch_one(
+        row = await self.fetch_one(
             "SELECT * FROM provider_keys WHERE provider = ?", (provider,)
         )
+        return self._parse_provider_models(row) if row else None
 
     async def upsert_provider_key(
-        self, provider: str, display_name: str,
-        api_key: str | None, api_base: str | None
+        self,
+        provider: str,
+        display_name: str,
+        api_key: str | None,
+        api_base: str | None,
+        models: list | None = None,
     ) -> dict:
+        existing = await self.get_provider_key(provider)
+        # 未提供 models 时保留原有列表
+        if models is None:
+            models = existing["models"] if existing else []
+        models_json = json.dumps(models, ensure_ascii=False)
+        # 未提供 api_key 时保留原有 key（传 None 且有旧值则不覆盖）
+        if api_key is None and existing and existing.get("api_key"):
+            api_key_val = existing["api_key"]
+        else:
+            api_key_val = api_key or None
         await self.execute(
-            """INSERT INTO provider_keys (provider, display_name, api_key, api_base)
-               VALUES (?, ?, ?, ?)
+            """INSERT INTO provider_keys (provider, display_name, api_key, api_base, models)
+               VALUES (?, ?, ?, ?, ?)
                ON CONFLICT(provider) DO UPDATE SET
                  display_name = excluded.display_name,
                  api_key      = excluded.api_key,
                  api_base     = excluded.api_base,
+                 models       = excluded.models,
                  updated_at   = CURRENT_TIMESTAMP""",
-            (provider, display_name, api_key or None, api_base or None),
+            (provider, display_name, api_key_val, api_base or None, models_json),
         )
+        return await self.get_provider_key(provider)
+
+    async def update_provider_models(self, provider: str, models: list) -> dict | None:
+        """更新指定 provider 的模型列表（不影响 key）。"""
+        models_json = json.dumps(models, ensure_ascii=False)
+        cursor = await self.execute(
+            "UPDATE provider_keys SET models = ?, updated_at = CURRENT_TIMESTAMP WHERE provider = ?",
+            (models_json, provider),
+        )
+        if cursor.rowcount == 0:
+            return None
         return await self.get_provider_key(provider)
 
     async def delete_provider_key(self, provider: str) -> bool:

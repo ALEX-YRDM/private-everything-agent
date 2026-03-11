@@ -24,11 +24,18 @@ class LiteLLMProvider(LLMProvider):
         self.api_base = api_base
 
     def _build_kwargs(self, model: str, **kwargs) -> dict:
+        from .key_manager import get_provider_credentials
         kw = {"model": model, **kwargs}
-        if self.api_key:
-            kw["api_key"] = self.api_key
-        if self.api_base:
-            kw["api_base"] = self.api_base
+
+        # 从注册表查询该模型 provider 的 key/base（覆盖实例级全局配置）
+        creds = get_provider_credentials(model)
+        api_key  = creds.get("api_key")  or self.api_key
+        api_base = creds.get("api_base") or self.api_base
+
+        if api_key:
+            kw["api_key"] = api_key
+        if api_base:
+            kw["api_base"] = api_base
         return kw
 
     async def chat(self, messages, tools=None, model="gpt-4o", **kwargs) -> LLMResponse:

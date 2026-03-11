@@ -48,6 +48,11 @@ export interface ModelConfig {
   created_at: string
 }
 
+export interface ProviderModel {
+  id: string
+  label: string
+}
+
 export interface ProviderKey {
   id: number
   provider: string
@@ -55,6 +60,7 @@ export interface ProviderKey {
   api_key: string | null
   api_key_masked: string | null
   api_base: string | null
+  models: ProviderModel[]
   updated_at: string
 }
 
@@ -119,6 +125,11 @@ export const api = {
         method: 'POST',
         body: JSON.stringify({ model_id }),
       }),
+    test: (model_id: string) =>
+      request<{ ok: boolean; model_id: string; error?: string }>('/api/models/test', {
+        method: 'POST',
+        body: JSON.stringify({ model_id }),
+      }),
   },
   tools: {
     list: () => request<{ tools: string[] }>('/api/tools'),
@@ -133,10 +144,21 @@ export const api = {
   },
   providerKeys: {
     list: () => request<{ keys: ProviderKey[] }>('/api/provider-keys'),
-    upsert: (data: { provider: string; display_name: string; api_key?: string; api_base?: string }) =>
+    upsert: (data: {
+      provider: string
+      display_name: string
+      api_key?: string | null
+      api_base?: string | null
+      models?: ProviderModel[] | null
+    }) =>
       request<{ ok: boolean; row: ProviderKey }>('/api/provider-keys', {
         method: 'POST',
         body: JSON.stringify(data),
+      }),
+    updateModels: (provider: string, models: ProviderModel[]) =>
+      request<{ ok: boolean; row: ProviderKey }>(`/api/provider-keys/${provider}/models`, {
+        method: 'PUT',
+        body: JSON.stringify(models),
       }),
     delete: (provider: string) =>
       request<{ ok: boolean }>(`/api/provider-keys/${provider}`, { method: 'DELETE' }),

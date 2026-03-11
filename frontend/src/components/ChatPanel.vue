@@ -7,7 +7,7 @@ import {
 } from 'naive-ui'
 import MessageBubble from './MessageBubble.vue'
 import { useChatStore } from '../stores/chat'
-import { useSettingsStore, buildModelSelectOptions } from '../stores/settings'
+import { useSettingsStore } from '../stores/settings'
 import { api, type PromptTemplate, type ToolState } from '../api/http'
 
 const chat = useChatStore()
@@ -126,7 +126,8 @@ watch(() => chat.currentSessionId, (id) => {
 watch(showToolPanel, (v) => { if (v) loadToolStates() })
 
 // ── 会话专属模型 ─────────────────────────────────────────────────────────────
-const modelOptions = buildModelSelectOptions()
+// 使用 store 中从 DB 加载的模型选项（响应式）
+const modelOptions = settings.modelSelectOptions
 
 /** 当前会话的专属模型，null = 跟随全局 */
 const sessionModel = ref<string | null>(null)

@@ -6,11 +6,17 @@ router = APIRouter()
 # ── Provider API Keys 相关 ──────────────────────────────────────────────────
 
 
+class ProviderModel(BaseModel):
+    id: str
+    label: str
+
+
 class ProviderKeyUpsert(BaseModel):
     provider: str
     display_name: str
     api_key: str | None = None
     api_base: str | None = None
+    models: list[ProviderModel] | None = None  # None = 不更新模型列表
 
 
 # ── 模型配置相关（简化版：无需每条单独存 API Key）─────────────────────────
@@ -67,17 +73,30 @@ async def list_provider_keys(request: Request):
 
 @router.post("/provider-keys")
 async def upsert_provider_key(request: Request, body: ProviderKeyUpsert):
-    """新增或更新 Provider API Key（同一 provider 只保存一条）。"""
+    """新增或更新 Provider（API Key + 模型列表）。models=None 时不更新模型列表。"""
     from ..providers.key_manager import apply_provider_key
     db = request.app.state.agent.memory.db
+    models_list = [m.model_dump() for m in body.models] if body.models is not None else None
     row = await db.upsert_provider_key(
         provider=body.provider,
         display_name=body.display_name,
         api_key=body.api_key or None,
         api_base=body.api_base or None,
+        models=models_list,
     )
-    # 立即生效
-    apply_provider_key(body.provider, body.api_key or None, body.api_base or None)
+    # 立即生效（仅在有新 key 时才更新环境变量）
+    if body.api_key:
+        apply_provider_key(body.provider, body.api_key, body.api_base or None)
+    return {"ok": True, "row": row}
+
+
+@router.put("/provider-keys/{provider}/models")
+async def update_provider_models(request: Request, provider: str, body: list[ProviderModel]):
+    """替换指定 provider 的模型列表（不影响 API Key）。"""
+    db = request.app.state.agent.memory.db
+    row = await db.update_provider_models(provider, [m.model_dump() for m in body])
+    if not row:
+        raise HTTPException(status_code=404, detail="Provider 不存在")
     return {"ok": True, "row": row}
 
 
@@ -334,6 +353,30 @@ async def switch_model(request: Request):
         apply_provider_key(provider, pk.get("api_key"), pk.get("api_base"))
 
     return {"ok": True, "active_model": model_id, "provider": provider}
+
+
+@router.post("/models/test")
+async def test_model(request: Request):
+    """
+    校验指定模型是否可正常调用（发送一条最小请求）。
+    返回 {"ok": True} 或 {"ok": False, "error": "..."}，不会抛出 HTTP 错误。
+    """
+    import litellm
+    body = await request.json()
+    model_id = body.get("model_id", "").strip()
+    if not model_id:
+        raise HTTPException(status_code=400, detail="缺少 model_id")
+
+    try:
+        await litellm.acompletion(
+            model=model_id,
+            messages=[{"role": "user", "content": "hi"}],
+            max_tokens=1,
+            stream=False,
+        )
+        return {"ok": True, "model_id": model_id}
+    except Exception as e:
+        return {"ok": False, "model_id": model_id, "error": str(e)}
 
 
 # ── 定时任务接口 ────────────────────────────────────────────────────────────
