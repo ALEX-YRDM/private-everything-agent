@@ -50,6 +50,7 @@ class LiteLLMProvider(LLMProvider):
 
         accumulated_tool_calls: dict[int, dict] = {}
         accumulated_content = ""
+        accumulated_reasoning = ""
 
         async for chunk in await litellm.acompletion(**kw):
             delta = chunk.choices[0].delta
@@ -59,9 +60,10 @@ class LiteLLMProvider(LLMProvider):
                 accumulated_content += delta.content
                 yield StreamEvent(type="content_delta", content=delta.content)
 
-            # 思维链（DeepSeek R1 等）
+            # 思维链（DeepSeek R1 等）—— 同时累积，以便写回 assistant 消息
             reasoning = getattr(delta, "reasoning_content", None)
             if reasoning:
+                accumulated_reasoning += reasoning
                 yield StreamEvent(type="thinking", content=reasoning)
 
             if delta.tool_calls:
@@ -94,6 +96,8 @@ class LiteLLMProvider(LLMProvider):
                     type="tool_calls_ready",
                     data={
                         "content": accumulated_content,
+                        # reasoning_content 需原样回传给 DeepSeek 等 reasoning 模型
+                        "reasoning_content": accumulated_reasoning or None,
                         "tool_calls": [
                             {"id": t.id, "name": t.name, "arguments": t.arguments}
                             for t in tool_calls

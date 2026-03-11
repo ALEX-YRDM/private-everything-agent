@@ -157,6 +157,24 @@ async def update_title(request: Request, session_id: str, body: UpdateTitleReque
     return {"ok": True}
 
 
+class SessionModelRequest(BaseModel):
+    model: str | None = None  # None = 清除会话专属模型，恢复跟随全局
+
+
+@router.put("/sessions/{session_id}/model")
+async def set_session_model(request: Request, session_id: str, body: SessionModelRequest):
+    """设置/清除会话专属模型（不影响全局默认模型）。"""
+    agent = request.app.state.agent
+    session = await agent.sessions.get_session(session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="会话不存在")
+    await agent.memory.db.execute(
+        "UPDATE sessions SET model = ? WHERE id = ?",
+        (body.model, session_id),
+    )
+    return {"session_id": session_id, "model": body.model}
+
+
 @router.get("/models")
 async def list_models():
     """列出支持的模型。"""
@@ -389,7 +407,7 @@ async def run_task_now(request: Request, task_id: int):
     scheduler = request.app.state.scheduler
     if scheduler:
         import asyncio
-        asyncio.create_task(scheduler.run_task(task))
+        asyncio.create_task(scheduler.run_task(task_id))
     return {"ok": True, "message": "任务已触发，结果将保存到对应会话"}
 
 
@@ -399,3 +417,138 @@ def _validate_cron(expr: str):
     err = validate_expr(expr)
     if err:
         raise HTTPException(status_code=400, detail=err)
+
+
+# ── 提示词模板接口 ───────────────────────────────────────────────────────────
+
+
+class TemplateCreate(BaseModel):
+    name: str
+    content: str
+    category: str = "通用"
+    sort_order: int = 0
+
+
+class TemplateUpdate(BaseModel):
+    name: str | None = None
+    content: str | None = None
+    category: str | None = None
+    sort_order: int | None = None
+
+
+@router.get("/templates")
+async def list_templates(request: Request):
+    """列出所有提示词模板。"""
+    db = request.app.state.agent.memory.db
+    templates = await db.list_templates()
+    return {"templates": templates}
+
+
+@router.post("/templates")
+async def create_template(request: Request, body: TemplateCreate):
+    """创建提示词模板。"""
+    db = request.app.state.agent.memory.db
+    tpl = await db.create_template(
+        name=body.name,
+        content=body.content,
+        category=body.category,
+        sort_order=body.sort_order,
+    )
+    return tpl
+
+
+@router.put("/templates/{tpl_id}")
+async def update_template(request: Request, tpl_id: int, body: TemplateUpdate):
+    """更新提示词模板。"""
+    db = request.app.state.agent.memory.db
+    updates = body.model_dump(exclude_none=True)
+    tpl = await db.update_template(tpl_id, **updates)
+    if not tpl:
+        raise HTTPException(status_code=404, detail="模板不存在")
+    return tpl
+
+
+@router.delete("/templates/{tpl_id}")
+async def delete_template(request: Request, tpl_id: int):
+    """删除提示词模板。"""
+    db = request.app.state.agent.memory.db
+    ok = await db.delete_template(tpl_id)
+    if not ok:
+        raise HTTPException(status_code=404, detail="模板不存在")
+    return {"ok": True}
+
+
+# ── 工具热插拔接口 ───────────────────────────────────────────────────────────
+
+
+@router.get("/tools/state")
+async def get_tool_states(request: Request, session_id: str | None = None):
+    """
+    获取所有工具的当前状态。
+    session_id 可选：传入后同时返回该会话的 override 信息。
+    """
+    agent = request.app.state.agent
+    session_overrides: dict[str, bool] = {}
+    if session_id:
+        meta = await agent.memory.db.get_session_metadata(session_id)
+        session_overrides = meta.get("tool_overrides", {})
+    states = agent.tools.get_tool_states(session_overrides=session_overrides)
+    return {
+        "tools": states,
+        "globally_disabled": agent.tools.get_globally_disabled(),
+        "session_overrides": session_overrides,
+    }
+
+
+@router.put("/tools/{tool_name}/global")
+async def toggle_tool_global(request: Request, tool_name: str):
+    """切换工具的全局启用/禁用状态（影响所有会话）。"""
+    import json as _json
+    agent = request.app.state.agent
+    if tool_name not in agent.tools.list_tools():
+        raise HTTPException(status_code=404, detail=f"工具 '{tool_name}' 不存在")
+    new_enabled = agent.tools.toggle_global(tool_name)
+    # 持久化到数据库
+    disabled_list = agent.tools.get_globally_disabled()
+    await agent.memory.db.set_setting("disabled_tools", _json.dumps(disabled_list))
+    return {"tool": tool_name, "globally_enabled": new_enabled}
+
+
+@router.put("/sessions/{session_id}/tool-overrides")
+async def set_session_tool_overrides(request: Request, session_id: str):
+    """
+    设置/更新当前会话的工具 override。
+    body: {"overrides": {"exec": false, "web_search": true}}
+    传 null 表示清除该工具的 override（恢复跟随全局）。
+    """
+    agent = request.app.state.agent
+    session = await agent.sessions.get_session(session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="会话不存在")
+
+    body = await request.json()
+    new_overrides: dict[str, bool | None] = body.get("overrides", {})
+
+    meta = await agent.memory.db.get_session_metadata(session_id)
+    current_overrides: dict[str, bool] = meta.get("tool_overrides", {})
+
+    for tool_name, value in new_overrides.items():
+        if value is None:
+            current_overrides.pop(tool_name, None)
+        else:
+            current_overrides[tool_name] = bool(value)
+
+    meta["tool_overrides"] = current_overrides
+    await agent.memory.db.set_session_metadata(session_id, meta)
+    return {"session_id": session_id, "tool_overrides": current_overrides}
+
+
+@router.get("/sessions/{session_id}/tool-overrides")
+async def get_session_tool_overrides(request: Request, session_id: str):
+    """获取会话的工具 override 配置。"""
+    agent = request.app.state.agent
+    meta = await agent.memory.db.get_session_metadata(session_id)
+    return {
+        "session_id": session_id,
+        "tool_overrides": meta.get("tool_overrides", {}),
+    }

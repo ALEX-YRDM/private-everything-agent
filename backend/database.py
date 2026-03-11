@@ -65,6 +65,24 @@ async def init_db():
             created_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         );
 
+        -- 提示词模板
+        CREATE TABLE IF NOT EXISTS prompt_templates (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            name        TEXT NOT NULL,
+            content     TEXT NOT NULL,
+            category    TEXT DEFAULT '通用',
+            sort_order  INTEGER DEFAULT 0,
+            created_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );
+
+        -- 全局设置（键值存储，用于保存全局禁用工具等）
+        CREATE TABLE IF NOT EXISTS global_settings (
+            key        TEXT PRIMARY KEY,
+            value      TEXT NOT NULL,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );
+
         -- Provider API 密钥表（每类服务商一个 Key）
         CREATE TABLE IF NOT EXISTS provider_keys (
             id           INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -280,3 +298,80 @@ class DBManager:
             "DELETE FROM provider_keys WHERE provider = ?", (provider,)
         )
         return cursor.rowcount > 0
+
+    # ── 提示词模板 ──────────────────────────────────────────────────────────
+
+    async def list_templates(self) -> list[dict]:
+        return await self.fetch_all(
+            "SELECT * FROM prompt_templates ORDER BY category ASC, sort_order ASC, id ASC"
+        )
+
+    async def get_template(self, template_id: int) -> dict | None:
+        return await self.fetch_one(
+            "SELECT * FROM prompt_templates WHERE id = ?", (template_id,)
+        )
+
+    async def create_template(self, name: str, content: str,
+                              category: str = "通用", sort_order: int = 0) -> dict:
+        cursor = await self.execute(
+            "INSERT INTO prompt_templates (name, content, category, sort_order) VALUES (?, ?, ?, ?)",
+            (name, content, category, sort_order),
+        )
+        return await self.get_template(cursor.lastrowid)
+
+    async def update_template(self, template_id: int, **fields) -> dict | None:
+        allowed = {"name", "content", "category", "sort_order"}
+        updates = {k: v for k, v in fields.items() if k in allowed}
+        if not updates:
+            return await self.get_template(template_id)
+        updates["updated_at"] = "CURRENT_TIMESTAMP"
+        set_clause = ", ".join(
+            f"{k} = CURRENT_TIMESTAMP" if v == "CURRENT_TIMESTAMP" else f"{k} = ?"
+            for k, v in updates.items()
+        )
+        values = [v for v in updates.values() if v != "CURRENT_TIMESTAMP"]
+        await self.execute(
+            f"UPDATE prompt_templates SET {set_clause} WHERE id = ?",
+            (*values, template_id),
+        )
+        return await self.get_template(template_id)
+
+    async def delete_template(self, template_id: int) -> bool:
+        cursor = await self.execute(
+            "DELETE FROM prompt_templates WHERE id = ?", (template_id,)
+        )
+        return cursor.rowcount > 0
+
+    # ── 全局设置 ────────────────────────────────────────────────────────────
+
+    async def get_setting(self, key: str, default: str = "") -> str:
+        row = await self.fetch_one("SELECT value FROM global_settings WHERE key = ?", (key,))
+        return row["value"] if row else default
+
+    async def set_setting(self, key: str, value: str):
+        await self.execute(
+            """INSERT INTO global_settings (key, value)
+               VALUES (?, ?)
+               ON CONFLICT(key) DO UPDATE SET value = excluded.value,
+                   updated_at = CURRENT_TIMESTAMP""",
+            (key, value),
+        )
+
+    # ── 会话元数据 ──────────────────────────────────────────────────────────
+
+    async def get_session_metadata(self, session_id: str) -> dict:
+        import json as _json
+        row = await self.fetch_one("SELECT metadata FROM sessions WHERE id = ?", (session_id,))
+        if not row or not row.get("metadata"):
+            return {}
+        try:
+            return _json.loads(row["metadata"])
+        except Exception:
+            return {}
+
+    async def set_session_metadata(self, session_id: str, metadata: dict):
+        import json as _json
+        await self.execute(
+            "UPDATE sessions SET metadata = ? WHERE id = ?",
+            (_json.dumps(metadata, ensure_ascii=False), session_id),
+        )

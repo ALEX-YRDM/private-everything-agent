@@ -1,27 +1,30 @@
 <script setup lang="ts">
 import { ref, computed, nextTick, watch } from 'vue'
-import { NInput, NButton, NScrollbar, NSpin, NEmpty, NTooltip } from 'naive-ui'
+import {
+  NInput, NButton, NScrollbar, NSpin, NEmpty, NTooltip,
+  NPopover, NDivider, NSwitch, NTag, NSelect,
+  useMessage,
+} from 'naive-ui'
 import MessageBubble from './MessageBubble.vue'
 import { useChatStore } from '../stores/chat'
+import { useSettingsStore, buildModelSelectOptions } from '../stores/settings'
+import { api, type PromptTemplate, type ToolState } from '../api/http'
 
 const chat = useChatStore()
+const settings = useSettingsStore()
+const message = useMessage()
 const inputText = ref('')
 const scrollbarRef = ref<InstanceType<typeof NScrollbar> | null>(null)
 
 const allMessages = computed(() => {
   const msgs = [...chat.messages]
-  if (chat.streamingMessage) {
-    msgs.push(chat.streamingMessage)
-  }
+  if (chat.streamingMessage) msgs.push(chat.streamingMessage)
   return msgs
 })
 
 function scrollToBottom() {
-  nextTick(() => {
-    scrollbarRef.value?.scrollTo({ top: 999999, behavior: 'smooth' })
-  })
+  nextTick(() => scrollbarRef.value?.scrollTo({ top: 999999, behavior: 'smooth' }))
 }
-
 watch(allMessages, scrollToBottom, { deep: true })
 
 async function sendMessage() {
@@ -32,13 +35,140 @@ async function sendMessage() {
 }
 
 function handleKeydown(e: KeyboardEvent) {
-  // e.isComposing 为 true 时表示 IME 正在组合输入（如中文输入法选字阶段）
-  // 此时按 Enter 是确认候选词，不应发送消息
   if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) {
     e.preventDefault()
     sendMessage()
   }
 }
+
+// ── 提示词模板选择器 ─────────────────────────────────────────────────────────
+const templates = ref<PromptTemplate[]>([])
+const showTemplatePicker = ref(false)
+const templateSearch = ref('')
+
+async function loadTemplates() {
+  try {
+    const data = await api.templates.list()
+    templates.value = data.templates
+  } catch (e) { console.error(e) }
+}
+
+// 按分类分组
+const groupedTemplates = computed(() => {
+  const filtered = templates.value.filter(t =>
+    !templateSearch.value || t.name.includes(templateSearch.value) || t.category.includes(templateSearch.value)
+  )
+  const groups: Record<string, PromptTemplate[]> = {}
+  for (const t of filtered) {
+    if (!groups[t.category]) groups[t.category] = []
+    ;(groups[t.category] as PromptTemplate[]).push(t)
+  }
+  return groups
+})
+
+function applyTemplate(tpl: PromptTemplate) {
+  inputText.value = tpl.content
+  showTemplatePicker.value = false
+  // 聚焦输入框
+  nextTick(() => {
+    const el = document.querySelector('.message-input textarea') as HTMLTextAreaElement | null
+    el?.focus()
+  })
+}
+
+// ── 会话工具开关 ─────────────────────────────────────────────────────────────
+const toolStates = ref<ToolState[]>([])
+const sessionOverrides = ref<Record<string, boolean>>({})
+const showToolPanel = ref(false)
+const savingTool = ref<string | null>(null)
+
+async function loadToolStates() {
+  if (!chat.currentSessionId) return
+  try {
+    const data = await api.toolState.getAll(chat.currentSessionId)
+    toolStates.value = data.tools
+    sessionOverrides.value = data.session_overrides
+  } catch (e) { console.error(e) }
+}
+
+async function toggleGlobalTool(toolName: string) {
+  savingTool.value = toolName
+  try {
+    const res = await api.toolState.toggleGlobal(toolName)
+    const t = toolStates.value.find(x => x.name === toolName)
+    if (t) {
+      t.global_enabled = res.globally_enabled
+      // 重新计算 effective
+      const override = sessionOverrides.value[toolName]
+      t.effective_enabled = override !== undefined ? override : res.globally_enabled
+      t.scope = override !== undefined ? (override ? 'session_on' : 'session_off') : 'global'
+    }
+    message.success(`工具「${toolName}」全局${res.globally_enabled ? '已启用' : '已禁用'}`)
+  } catch (e) { message.error(String(e)) } finally { savingTool.value = null }
+}
+
+async function setSessionOverride(toolName: string, value: boolean | null) {
+  if (!chat.currentSessionId) return
+  savingTool.value = toolName
+  try {
+    const res = await api.toolState.setSessionOverrides(chat.currentSessionId, { [toolName]: value })
+    sessionOverrides.value = res.tool_overrides
+    // 刷新该工具状态
+    await loadToolStates()
+  } catch (e) { message.error(String(e)) } finally { savingTool.value = null }
+}
+
+// 打开工具面板时加载，会话切换时也刷新
+watch(() => chat.currentSessionId, (id) => {
+  if (id) { loadToolStates(); syncSessionModel() }
+}, { immediate: true })
+
+watch(showToolPanel, (v) => { if (v) loadToolStates() })
+
+// ── 会话专属模型 ─────────────────────────────────────────────────────────────
+const modelOptions = buildModelSelectOptions()
+
+/** 当前会话的专属模型，null = 跟随全局 */
+const sessionModel = ref<string | null>(null)
+const savingModel = ref(false)
+
+/** 从 chat store 的 currentSession 同步会话模型 */
+function syncSessionModel() {
+  sessionModel.value = chat.currentSession?.model ?? null
+}
+watch(() => chat.currentSession, syncSessionModel)
+
+/** 有效模型：会话专属 > 全局 */
+const effectiveModel = computed(() =>
+  sessionModel.value || settings.currentModel
+)
+
+async function setSessionModel(modelId: string | null | undefined) {
+  if (!chat.currentSessionId) return
+  // 空字符串 / undefined 视为清除
+  const value = modelId || null
+  savingModel.value = true
+  try {
+    await api.sessions.setModel(chat.currentSessionId, value)
+    sessionModel.value = value
+    // 同步 session 对象（无需整体刷新列表）
+    if (chat.currentSession) {
+      chat.currentSession.model = value
+    }
+    if (value) {
+      message.success(`此会话将使用模型: ${value}`)
+    } else {
+      message.info(`已恢复跟随全局模型: ${settings.currentModel}`)
+    }
+  } catch (e) {
+    message.error('设置会话模型失败')
+  } finally {
+    savingModel.value = false
+  }
+}
+
+// 加载模板
+loadTemplates()
 </script>
 
 <template>
@@ -58,11 +188,7 @@ function handleKeydown(e: KeyboardEvent) {
           description="发送消息开始对话"
           class="empty-chat"
         />
-        <MessageBubble
-          v-for="msg in allMessages"
-          :key="msg.id"
-          :message="msg"
-        />
+        <MessageBubble v-for="msg in allMessages" :key="msg.id" :message="msg" />
         <div v-if="chat.isStreaming && !chat.streamingMessage" class="typing-indicator">
           <NSpin size="small" />
           <span>思考中…</span>
@@ -72,39 +198,213 @@ function handleKeydown(e: KeyboardEvent) {
 
     <!-- 输入区域 -->
     <div class="input-area" v-if="chat.currentSessionId">
-      <NInput
-        v-model:value="inputText"
-        type="textarea"
-        :autosize="{ minRows: 1, maxRows: 6 }"
-        :placeholder="chat.isStreaming ? '等待响应完成…' : '发送消息（Enter 发送，Shift+Enter 换行）'"
-        :disabled="chat.isStreaming"
-        @keydown="handleKeydown"
-        class="message-input"
-      />
-      <div class="input-actions">
-        <NTooltip v-if="chat.isStreaming">
-          <template #trigger>
-            <NButton
-              type="error"
-              size="medium"
-              @click="chat.stopStreaming()"
-            >
-              停止
-            </NButton>
-          </template>
-          停止当前响应
-        </NTooltip>
-        <NButton
-          v-else
-          type="primary"
-          size="medium"
-          :disabled="!inputText.trim()"
-          @click="sendMessage"
+      <!-- 工具栏：会话模型 + 模板选择 + 工具开关 -->
+      <div class="input-toolbar">
+
+        <!-- 会话专属模型选择器 -->
+        <NPopover
+          trigger="click"
+          placement="top-start"
+          :style="{ width: '300px' }"
         >
-          发送
-        </NButton>
+          <template #trigger>
+            <NTooltip>
+              <template #trigger>
+                <NButton
+                  size="tiny"
+                  quaternary
+                  :type="sessionModel ? 'warning' : 'default'"
+                >
+                  🤖 {{ sessionModel ? sessionModel.split('/').pop() : '会话模型' }}
+                </NButton>
+              </template>
+              {{ sessionModel ? `当前会话使用: ${sessionModel}` : '为此会话单独选择模型（不影响全局）' }}
+            </NTooltip>
+          </template>
+
+          <div class="model-popover">
+            <div class="model-popover-title">
+              会话专属模型
+              <span class="model-popover-hint">不影响全局 · 实际: {{ effectiveModel.split('/').pop() }}</span>
+            </div>
+            <NSelect
+              :value="sessionModel || ''"
+              :options="[
+                { value: '', label: `🌐 跟随全局 (${settings.currentModel.split('/').pop()})` },
+                ...modelOptions
+              ]"
+              filterable
+              placeholder="搜索或选择模型…"
+              size="small"
+              :loading="savingModel"
+              style="width: 100%"
+              @update:value="setSessionModel"
+            />
+          </div>
+        </NPopover>
+
+        <!-- 模板选择器 -->
+        <NPopover
+          v-model:show="showTemplatePicker"
+          trigger="click"
+          placement="top-start"
+          :style="{ width: '340px', maxHeight: '420px' }"
+          scrollable
+        >
+          <template #trigger>
+            <NTooltip>
+              <template #trigger>
+                <NButton size="tiny" quaternary @click="showTemplatePicker = !showTemplatePicker">
+                  📋 模板
+                </NButton>
+              </template>
+              选择提示词模板
+            </NTooltip>
+          </template>
+
+          <div class="template-picker">
+            <NInput
+              v-model:value="templateSearch"
+              size="small"
+              placeholder="搜索模板…"
+              clearable
+              style="margin-bottom: 8px"
+            />
+            <template v-if="Object.keys(groupedTemplates).length === 0">
+              <div class="empty-tip">暂无模板，可在设置中添加</div>
+            </template>
+            <template v-for="(items, category) in groupedTemplates" :key="category">
+              <div class="tpl-category">{{ category }}</div>
+              <div
+                v-for="tpl in items"
+                :key="tpl.id"
+                class="tpl-item"
+                @click="applyTemplate(tpl)"
+              >
+                <span class="tpl-name">{{ tpl.name }}</span>
+                <span class="tpl-preview">{{ tpl.content.slice(0, 40) }}…</span>
+              </div>
+            </template>
+          </div>
+        </NPopover>
+
+        <!-- 工具开关面板 -->
+        <NPopover
+          v-model:show="showToolPanel"
+          trigger="click"
+          placement="top-start"
+          :style="{ width: '360px', maxHeight: '460px' }"
+          scrollable
+        >
+          <template #trigger>
+            <NTooltip>
+              <template #trigger>
+                <NButton size="tiny" quaternary @click="showToolPanel = !showToolPanel">
+                  🔧 工具
+                </NButton>
+              </template>
+              管理本会话可用工具
+            </NTooltip>
+          </template>
+
+          <div class="tool-panel">
+            <div class="tool-panel-header">
+              <span>工具热插拔</span>
+              <NTag size="small" type="info">会话级优先于全局</NTag>
+            </div>
+            <div class="tool-panel-legend">
+              <NTag size="tiny" type="success">会话启用</NTag>
+              <NTag size="tiny" type="error">会话禁用</NTag>
+              <NTag size="tiny">跟随全局</NTag>
+            </div>
+            <NDivider style="margin: 8px 0" />
+
+            <div v-for="tool in toolStates" :key="tool.name" class="tool-row">
+              <div class="tool-info">
+                <span class="tool-name">{{ tool.name }}</span>
+                <NTag
+                  size="tiny"
+                  :type="tool.effective_enabled ? 'success' : 'error'"
+                >{{ tool.effective_enabled ? '启用' : '禁用' }}</NTag>
+                <NTag
+                  v-if="tool.scope !== 'global'"
+                  size="tiny"
+                  :type="tool.scope === 'session_on' ? 'success' : 'error'"
+                >会话覆盖</NTag>
+              </div>
+              <div class="tool-controls">
+                <!-- 会话级覆盖 -->
+                <NTooltip>
+                  <template #trigger>
+                    <NButton
+                      size="tiny"
+                      :type="tool.scope === 'session_on' ? 'success' : 'default'"
+                      :ghost="tool.scope !== 'session_on'"
+                      :loading="savingTool === tool.name"
+                      @click="setSessionOverride(tool.name, tool.scope === 'session_on' ? null : true)"
+                    >启</NButton>
+                  </template>
+                  {{ tool.scope === 'session_on' ? '点击取消会话启用' : '为本会话强制启用' }}
+                </NTooltip>
+                <NTooltip>
+                  <template #trigger>
+                    <NButton
+                      size="tiny"
+                      :type="tool.scope === 'session_off' ? 'error' : 'default'"
+                      :ghost="tool.scope !== 'session_off'"
+                      :loading="savingTool === tool.name"
+                      @click="setSessionOverride(tool.name, tool.scope === 'session_off' ? null : false)"
+                    >禁</NButton>
+                  </template>
+                  {{ tool.scope === 'session_off' ? '点击取消会话禁用' : '为本会话强制禁用' }}
+                </NTooltip>
+                <!-- 全局开关 -->
+                <NTooltip>
+                  <template #trigger>
+                    <NSwitch
+                      :value="tool.global_enabled"
+                      size="small"
+                      :loading="savingTool === tool.name"
+                      @update:value="toggleGlobalTool(tool.name)"
+                    />
+                  </template>
+                  全局{{ tool.global_enabled ? '已启用' : '已禁用' }}（影响所有会话）
+                </NTooltip>
+              </div>
+            </div>
+          </div>
+        </NPopover>
+      </div>
+
+      <!-- 输入框 + 发送按钮 -->
+      <div class="input-row">
+        <NInput
+          v-model:value="inputText"
+          type="textarea"
+          :autosize="{ minRows: 3, maxRows: 12 }"
+          :placeholder="chat.isStreaming ? '等待响应完成…' : '发送消息（Enter 发送，Shift+Enter 换行）'"
+          :disabled="chat.isStreaming"
+          @keydown="handleKeydown"
+          class="message-input"
+        />
+        <div class="send-btn">
+          <NTooltip v-if="chat.isStreaming">
+            <template #trigger>
+              <NButton type="error" size="medium" @click="chat.stopStreaming()">停止</NButton>
+            </template>
+            停止当前响应
+          </NTooltip>
+          <NButton
+            v-else
+            type="primary"
+            size="medium"
+            :disabled="!inputText.trim()"
+            @click="sendMessage"
+          >发送</NButton>
+        </div>
       </div>
     </div>
+
     <div v-else class="no-session-hint">
       请从左侧选择或创建一个会话
     </div>
@@ -137,18 +437,9 @@ function handleKeydown(e: KeyboardEvent) {
   white-space: nowrap;
 }
 
-.messages-area {
-  flex: 1;
-}
-
-.messages-container {
-  padding: 16px 20px;
-  min-height: 100%;
-}
-
-.empty-chat {
-  margin-top: 60px;
-}
+.messages-area { flex: 1; }
+.messages-container { padding: 16px 20px; min-height: 100%; }
+.empty-chat { margin-top: 60px; }
 
 .typing-indicator {
   display: flex;
@@ -161,25 +452,129 @@ function handleKeydown(e: KeyboardEvent) {
 
 .input-area {
   border-top: 1px solid #e8e8e8;
-  padding: 12px 16px;
+  padding: 8px 16px 12px;
+}
+
+.input-toolbar {
+  display: flex;
+  gap: 4px;
+  margin-bottom: 6px;
+  align-items: center;
+}
+
+/* 会话模型 popover */
+.model-popover {
+  padding: 4px 2px;
+}
+
+.model-popover-title {
+  font-weight: 600;
+  font-size: 13px;
+  margin-bottom: 8px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.model-popover-hint {
+  font-size: 11px;
+  font-weight: 400;
+  color: #999;
+}
+
+.input-row {
   display: flex;
   gap: 8px;
   align-items: flex-end;
 }
 
-.message-input {
+.message-input { flex: 1; }
+
+.send-btn { flex-shrink: 0; }
+
+.no-session-hint {
   flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #aaa;
+  font-size: 14px;
 }
 
-.input-actions {
+/* 模板选择器 */
+.template-picker { font-size: 13px; }
+
+.tpl-category {
+  font-size: 11px;
+  font-weight: 600;
+  color: #888;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  margin: 8px 0 4px;
+  padding: 0 2px;
+}
+
+.tpl-item {
+  padding: 6px 8px;
+  border-radius: 6px;
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  transition: background 0.15s;
+}
+.tpl-item:hover { background: #f3f4f6; }
+
+.tpl-name { font-weight: 500; color: #1a1a1a; }
+.tpl-preview { font-size: 11px; color: #999; }
+.empty-tip { color: #aaa; text-align: center; padding: 12px 0; font-size: 13px; }
+
+/* 工具面板 */
+.tool-panel { font-size: 13px; }
+
+.tool-panel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-weight: 600;
+  margin-bottom: 4px;
+}
+
+.tool-panel-legend {
+  display: flex;
+  gap: 6px;
+  font-size: 11px;
+  margin-bottom: 2px;
+}
+
+.tool-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 5px 0;
+  border-bottom: 1px solid #f3f4f6;
+}
+.tool-row:last-child { border-bottom: none; }
+
+.tool-info {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 1;
+  min-width: 0;
+}
+
+.tool-name {
+  font-size: 12px;
+  font-family: monospace;
+  color: #333;
   flex-shrink: 0;
 }
 
-.no-session-hint {
-  border-top: 1px solid #e8e8e8;
-  padding: 16px;
-  text-align: center;
-  color: #aaa;
-  font-size: 13px;
+.tool-controls {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
 }
 </style>

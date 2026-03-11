@@ -15,7 +15,7 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
 export interface Session {
   id: string
   title: string
-  model: string | null
+  model: string | null   // 会话专属模型，null = 跟随全局
   created_at: string
   updated_at: string
 }
@@ -58,6 +58,24 @@ export interface ProviderKey {
   updated_at: string
 }
 
+export interface PromptTemplate {
+  id: number
+  name: string
+  content: string
+  category: string
+  sort_order: number
+  created_at: string
+  updated_at: string
+}
+
+export interface ToolState {
+  name: string
+  global_enabled: boolean
+  session_override: boolean | null
+  effective_enabled: boolean
+  scope: 'global' | 'session_on' | 'session_off'
+}
+
 export interface ScheduledTask {
   id: number
   name: string
@@ -87,6 +105,11 @@ export const api = {
       request<{ ok: boolean }>(`/api/sessions/${id}/title`, {
         method: 'PUT',
         body: JSON.stringify({ title }),
+      }),
+    setModel: (id: string, model: string | null) =>
+      request<{ session_id: string; model: string | null }>(`/api/sessions/${id}/model`, {
+        method: 'PUT',
+        body: JSON.stringify({ model }),
       }),
   },
   models: {
@@ -128,6 +151,32 @@ export const api = {
       request<{ ok: boolean }>(`/api/model-configs/${id}`, { method: 'DELETE' }),
     activate: (id: number) =>
       request<{ ok: boolean; active_model: string }>(`/api/model-configs/${id}/activate`, { method: 'POST' }),
+  },
+  templates: {
+    list: () => request<{ templates: PromptTemplate[] }>('/api/templates'),
+    create: (data: { name: string; content: string; category?: string; sort_order?: number }) =>
+      request<PromptTemplate>('/api/templates', { method: 'POST', body: JSON.stringify(data) }),
+    update: (id: number, data: Partial<PromptTemplate>) =>
+      request<PromptTemplate>(`/api/templates/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
+    delete: (id: number) =>
+      request<{ ok: boolean }>(`/api/templates/${id}`, { method: 'DELETE' }),
+  },
+  toolState: {
+    getAll: (sessionId?: string) =>
+      request<{ tools: ToolState[]; globally_disabled: string[]; session_overrides: Record<string, boolean> }>(
+        `/api/tools/state${sessionId ? `?session_id=${sessionId}` : ''}`
+      ),
+    toggleGlobal: (toolName: string) =>
+      request<{ tool: string; globally_enabled: boolean }>(`/api/tools/${toolName}/global`, { method: 'PUT' }),
+    setSessionOverrides: (sessionId: string, overrides: Record<string, boolean | null>) =>
+      request<{ session_id: string; tool_overrides: Record<string, boolean> }>(
+        `/api/sessions/${sessionId}/tool-overrides`,
+        { method: 'PUT', body: JSON.stringify({ overrides }) }
+      ),
+    getSessionOverrides: (sessionId: string) =>
+      request<{ session_id: string; tool_overrides: Record<string, boolean> }>(
+        `/api/sessions/${sessionId}/tool-overrides`
+      ),
   },
   tasks: {
     list: () => request<{ tasks: ScheduledTask[] }>('/api/tasks'),

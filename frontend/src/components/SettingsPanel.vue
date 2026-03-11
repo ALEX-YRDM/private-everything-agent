@@ -4,10 +4,10 @@ import {
   NDrawer, NDrawerContent, NSelect, NDivider, NTag, NButton,
   NModal, NForm, NFormItem, NInput, NInputNumber,
   NDataTable, useMessage, NTabs, NTabPane, NSpace, NPopconfirm,
-  NAlert,
+  NAlert, NSwitch, NTooltip,
 } from 'naive-ui'
 import { useSettingsStore, buildModelSelectOptions } from '../stores/settings'
-import { api, type ModelConfig, type ProviderKey } from '../api/http'
+import { api, type ModelConfig, type ProviderKey, type PromptTemplate, type ToolState } from '../api/http'
 
 const settings = useSettingsStore()
 const message = useMessage()
@@ -184,16 +184,105 @@ function getKeyStatus(provider: string) {
   return providerKeys.value.find(k => k.provider === provider)
 }
 
-// ── 工具列表 ─────────────────────────────────────────────────────────────────
-const toolTagTypes: Record<string, 'default' | 'info' | 'success' | 'warning'> = {
-  read_file: 'info', write_file: 'info', edit_file: 'info', list_dir: 'info',
-  exec: 'warning', web_search: 'success', web_fetch: 'success',
-  create_task: 'default', list_tasks: 'default', delete_task: 'default', update_task: 'default',
+
+// ── 提示词模板管理 ───────────────────────────────────────────────────────────
+const templates = ref<PromptTemplate[]>([])
+const showTplModal = ref(false)
+const editingTpl = ref<PromptTemplate | null>(null)
+const tplForm = ref({ name: '', content: '', category: '通用', sort_order: 0 })
+
+const CATEGORIES = ['通用', '编程', '研究', '写作', '翻译', '效率', '其他']
+
+async function loadTemplates() {
+  try {
+    const data = await api.templates.list()
+    templates.value = data.templates
+  } catch (e) { console.error(e) }
+}
+
+function openCreateTpl() {
+  editingTpl.value = null
+  tplForm.value = { name: '', content: '', category: '通用', sort_order: 0 }
+  showTplModal.value = true
+}
+
+function openEditTpl(tpl: PromptTemplate) {
+  editingTpl.value = tpl
+  tplForm.value = { name: tpl.name, content: tpl.content, category: tpl.category, sort_order: tpl.sort_order }
+  showTplModal.value = true
+}
+
+async function saveTpl() {
+  if (!tplForm.value.name.trim() || !tplForm.value.content.trim()) {
+    message.warning('请填写模板名称和内容')
+    return
+  }
+  try {
+    if (editingTpl.value) {
+      await api.templates.update(editingTpl.value.id, tplForm.value)
+      message.success('模板已更新')
+    } else {
+      await api.templates.create(tplForm.value)
+      message.success('模板已创建')
+    }
+    showTplModal.value = false
+    await loadTemplates()
+  } catch (e) { message.error(String(e)) }
+}
+
+async function deleteTpl(tpl: PromptTemplate) {
+  try {
+    await api.templates.delete(tpl.id)
+    await loadTemplates()
+    message.success('已删除')
+  } catch (e) { message.error(String(e)) }
+}
+
+// 模板列表列配置
+const tplColumns = [
+  { title: '名称', key: 'name', width: 120 },
+  { title: '分类', key: 'category', width: 70 },
+  { title: '内容预览', key: 'content',
+    render: (row: PromptTemplate) => h('span', { style: 'color:#888;font-size:12px' },
+      row.content.slice(0, 30) + (row.content.length > 30 ? '…' : ''))
+  },
+  { title: '操作', key: 'actions', width: 110,
+    render: (row: PromptTemplate) => h(NSpace, { size: 'small' }, {
+      default: () => [
+        h(NButton, { size: 'tiny', onClick: () => openEditTpl(row) }, { default: () => '编辑' }),
+        h(NPopconfirm, { onPositiveClick: () => deleteTpl(row) }, {
+          trigger: () => h(NButton, { size: 'tiny', type: 'error', ghost: true }, { default: () => '删除' }),
+          default: () => '确定删除此模板？',
+        }),
+      ],
+    }),
+  },
+]
+
+// ── 全局工具管理 ─────────────────────────────────────────────────────────────
+const globalToolStates = ref<ToolState[]>([])
+const togglingTool = ref<string | null>(null)
+
+async function loadGlobalToolStates() {
+  try {
+    const data = await api.toolState.getAll()
+    globalToolStates.value = data.tools
+  } catch (e) { console.error(e) }
+}
+
+async function toggleGlobal(toolName: string) {
+  togglingTool.value = toolName
+  try {
+    const res = await api.toolState.toggleGlobal(toolName)
+    const t = globalToolStates.value.find(x => x.name === toolName)
+    if (t) t.global_enabled = res.globally_enabled
+    message.success(`工具「${toolName}」全局${res.globally_enabled ? '已启用' : '已禁用'}`)
+  } catch (e) { message.error(String(e)) } finally { togglingTool.value = null }
 }
 
 onMounted(async () => {
   await settings.init()
-  await Promise.all([loadModelConfigs(), loadProviderKeys()])
+  await Promise.all([loadModelConfigs(), loadProviderKeys(), loadTemplates(), loadGlobalToolStates()])
 })
 </script>
 
@@ -297,24 +386,94 @@ onMounted(async () => {
           </div>
         </NTabPane>
 
-        <!-- Tab 3: 工具 -->
+        <!-- Tab 3: 工具全局管理 -->
         <NTabPane name="tools" tab="🔧 工具">
           <div class="section">
-            <h4>已注册工具（{{ settings.tools.length }}）</h4>
-            <div class="tool-tags">
-              <NTag
-                v-for="tool in settings.tools"
-                :key="tool"
-                :type="toolTagTypes[tool] || 'default'"
-                size="small"
-              >{{ tool }}</NTag>
+            <h4>全局工具开关</h4>
+            <p class="hint">
+              全局禁用后，该工具在所有会话中默认不可用。
+              可在聊天界面的工具面板中为单个会话设置覆盖。
+            </p>
+            <div v-for="tool in globalToolStates" :key="tool.name" class="global-tool-row">
+              <div class="global-tool-info">
+                <code class="tool-code">{{ tool.name }}</code>
+                <NTag
+                  size="tiny"
+                  :type="tool.global_enabled ? 'success' : 'default'"
+                >{{ tool.global_enabled ? '全局启用' : '全局禁用' }}</NTag>
+              </div>
+              <NTooltip>
+                <template #trigger>
+                  <NSwitch
+                    :value="tool.global_enabled"
+                    :loading="togglingTool === tool.name"
+                    @update:value="toggleGlobal(tool.name)"
+                  />
+                </template>
+                {{ tool.global_enabled ? '点击全局禁用' : '点击全局启用' }}
+              </NTooltip>
             </div>
+          </div>
+        </NTabPane>
+
+        <!-- Tab 4: 提示词模板 -->
+        <NTabPane name="templates" tab="📋 模板">
+          <div class="section">
+            <div class="section-header">
+              <h4>提示词模板（{{ templates.length }}）</h4>
+              <NButton size="small" type="primary" @click="openCreateTpl">+ 新建</NButton>
+            </div>
+            <p class="hint">在聊天输入框点击「📋 模板」可快速选用，Shift+Enter 保留换行。</p>
+            <NDataTable
+              :columns="tplColumns"
+              :data="templates"
+              size="small"
+              :bordered="false"
+              striped
+              :max-height="360"
+            />
           </div>
         </NTabPane>
 
       </NTabs>
     </NDrawerContent>
   </NDrawer>
+
+  <!-- 模板 Modal -->
+  <NModal
+    v-model:show="showTplModal"
+    preset="card"
+    :title="editingTpl ? '编辑模板' : '新建提示词模板'"
+    :style="{ width: '520px' }"
+  >
+    <NForm label-placement="left" label-width="80">
+      <NFormItem label="名称">
+        <NInput v-model:value="tplForm.name" placeholder="如：代码审查" />
+      </NFormItem>
+      <NFormItem label="分类">
+        <NSelect
+          v-model:value="tplForm.category"
+          :options="CATEGORIES.map(c => ({ value: c, label: c }))"
+          tag
+          placeholder="选择或输入分类"
+        />
+      </NFormItem>
+      <NFormItem label="模板内容">
+        <NInput
+          v-model:value="tplForm.content"
+          type="textarea"
+          :autosize="{ minRows: 6, maxRows: 16 }"
+          placeholder="输入提示词模板，用 [占位符] 标记需要填写的部分"
+        />
+      </NFormItem>
+    </NForm>
+    <template #footer>
+      <NSpace justify="end">
+        <NButton @click="showTplModal = false">取消</NButton>
+        <NButton type="primary" @click="saveTpl">保存</NButton>
+      </NSpace>
+    </template>
+  </NModal>
 
   <!-- 模型预设 Modal -->
   <NModal
@@ -440,5 +599,30 @@ onMounted(async () => {
 .provider-actions {
   display: flex;
   gap: 6px;
+}
+
+/* 全局工具行 */
+.global-tool-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 0;
+  border-bottom: 1px solid #f3f4f6;
+}
+.global-tool-row:last-child { border-bottom: none; }
+
+.global-tool-info {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.tool-code {
+  font-family: monospace;
+  font-size: 12px;
+  color: #333;
+  background: #f5f5f5;
+  padding: 2px 6px;
+  border-radius: 4px;
 }
 </style>

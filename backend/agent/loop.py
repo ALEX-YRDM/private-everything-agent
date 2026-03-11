@@ -64,9 +64,17 @@ class AgentLoop:
         """
         history = await self.sessions.get_history(session_id)
         messages = await self.context.build_messages(history, user_content, session_id)
-        tool_defs = self.tools.get_definitions()
 
-        effective_model = model or self.model  # model 参数允许任务级临时覆盖
+        # 获取会话级工具覆盖配置 + 会话专属模型
+        session_row = await self.sessions.get_session(session_id)
+        session_model = (session_row or {}).get("model") or None
+        session_meta = await self.memory.db.get_session_metadata(session_id)
+        session_overrides: dict[str, bool] = session_meta.get("tool_overrides", {})
+
+        tool_defs = self.tools.get_definitions(session_overrides=session_overrides)
+
+        # 优先级：显式 model 参数（定时任务覆盖）> 会话专属模型 > 全局默认模型
+        effective_model = model or session_model or self.model
 
         new_messages: list[dict] = []
         final_content: str | None = None
@@ -107,8 +115,9 @@ class AgentLoop:
                 if tool_calls_ready:
                     tc_content = tool_calls_ready["content"]
                     tc_list = tool_calls_ready["tool_calls"]
+                    tc_reasoning = tool_calls_ready.get("reasoning_content")
 
-                    assistant_msg = {
+                    assistant_msg: dict = {
                         "role": "assistant",
                         "content": tc_content,
                         "tool_calls": [
@@ -123,11 +132,16 @@ class AgentLoop:
                             for tc in tc_list
                         ],
                     }
+                    # DeepSeek reasoning 模型要求 tool_calls 消息里必须携带 reasoning_content
+                    if tc_reasoning:
+                        assistant_msg["reasoning_content"] = tc_reasoning
                     messages.append(assistant_msg)
                     new_messages.append(assistant_msg)
 
                     for tc in tc_list:
-                        result = await self.tools.execute(tc["name"], tc["arguments"])
+                        result = await self.tools.execute(
+                            tc["name"], tc["arguments"], session_overrides=session_overrides
+                        )
                         if len(result) > self.TOOL_RESULT_MAX_CHARS:
                             result = result[: self.TOOL_RESULT_MAX_CHARS] + "...[已截断]"
 
