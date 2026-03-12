@@ -158,6 +158,41 @@ _DEFAULT_PROVIDERS = [
             {"id": "moonshot/moonshot-v1-32k",  "label": "Moonshot v1 32K"},
         ],
     },
+    {
+        "provider": "dashscope",
+        "display_name": "阿里云 (百炼/通义)",
+        "api_base": None,
+        "models": [
+            {"id": "dashscope/qwen-max",            "label": "Qwen Max"},
+            {"id": "dashscope/qwen-max-longcontext", "label": "Qwen Max Long"},
+            {"id": "dashscope/qwen-plus",           "label": "Qwen Plus"},
+            {"id": "dashscope/qwen-turbo",          "label": "Qwen Turbo"},
+            {"id": "dashscope/qwen2.5-72b-instruct","label": "Qwen 2.5 72B"},
+            {"id": "dashscope/qwen2.5-32b-instruct","label": "Qwen 2.5 32B"},
+            {"id": "dashscope/qwq-32b",             "label": "QwQ 32B"},
+        ],
+    },
+    {
+        "provider": "minimax",
+        "display_name": "MiniMax",
+        "api_base": None,
+        "models": [
+            {"id": "minimax/MiniMax-Text-01", "label": "MiniMax Text-01"},
+            {"id": "minimax/abab6.5s-chat",   "label": "ABAB 6.5S"},
+            {"id": "minimax/abab6.5g-chat",   "label": "ABAB 6.5G"},
+            {"id": "minimax/abab5.5s-chat",   "label": "ABAB 5.5S"},
+        ],
+    },
+    {
+        "provider": "zai",
+        "display_name": "智谱 AI (GLM)",
+        "api_base": None,
+        "models": [
+            {"id": "zai/glm-4.7",    "label": "glm-4.7"},
+            {"id": "zai/glm-4.6",     "label": "glm-4.6"},
+            {"id": "zai/glm-4.5",    "label": "glm-4.5"}
+        ],
+    },
 ]
 
 

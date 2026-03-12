@@ -27,9 +27,19 @@ async function switchModel(modelId: string) {
 
 // LiteLLM 已知的标准 provider（有内置路由，不需要 api_base）
 const STANDARD_PROVIDERS = new Set([
-  'openai','anthropic','gemini','deepseek','groq','mistral',
-  'together_ai','openrouter','xai','perplexity','cohere',
-  'azure','volcengine','moonshot','zhipuai','baidu','dashscope','ollama',
+  
+    "openai", "anthropic", "gemini", "deepseek", "groq", "mistral",
+    "together_ai", "openrouter", "xai", "perplexity", "cohere",
+    
+    "azure", "bedrock", "vertex_ai",
+   
+    "volcengine", "moonshot", "zhipuai", "zai", "baidu", "dashscope",
+    "minimax", "qianfan", "spark", "hunyuan",
+    
+    "ollama", "palm", "replicate", "huggingface",
+   
+    "ai21", "nlp_cloud", "aleph_alpha", "petals", "anyscale", "voyage",
+    "openllm", "oobabooga",
 ])
 
 // 编辑 Provider Key/信息的弹窗

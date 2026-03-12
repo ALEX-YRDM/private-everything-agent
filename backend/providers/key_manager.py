@@ -22,9 +22,9 @@ PROVIDER_ENV_MAP: dict[str, str] = {
     "azure":         "AZURE_API_KEY",
     "volcengine":    "VOLCENGINE_API_KEY",
     "moonshot":      "MOONSHOT_API_KEY",
-    "zhipuai":       "ZHIPUAI_API_KEY",
-    "baidu":         "QIANFAN_AK",
+    "zai":       "ZAI_API_KEY",
     "dashscope":     "DASHSCOPE_API_KEY",
+    "minimax":       "MINIMAX_API_KEY",
 }
 
 # provider → api_base 环境变量

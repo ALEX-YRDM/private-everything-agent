@@ -189,7 +189,7 @@ class AgentLoop:
         from ..providers.litellm_provider import LiteLLMProvider
         from ..tools.filesystem import ReadFileTool, WriteFileTool, EditFileTool, ListDirTool
         from ..tools.shell import ExecTool
-        from ..tools.web import WebSearchTool, WebFetchTool
+        from ..tools.web import WebSearchTool, DuckDuckGoSearchTool, WebFetchTool
         from ..tools.mcp_client import connect_mcp_servers
 
         workspace = Path(config.workspace)
@@ -213,6 +213,7 @@ class AgentLoop:
         tools.register(ExecTool(workspace, config.tools.shell_timeout))
         if config.tools.brave_api_key:
             tools.register(WebSearchTool(config.tools.brave_api_key))
+        tools.register(DuckDuckGoSearchTool())
         tools.register(WebFetchTool())
 
         exit_stack = AsyncExitStack()

@@ -7,10 +7,19 @@ litellm.set_verbose = False
 
 # LiteLLM 原生支持的 provider（有内置路由，无需特殊处理）
 _NATIVE_PROVIDERS = frozenset({
+    # 主流商业
     "openai", "anthropic", "gemini", "deepseek", "groq", "mistral",
-    "together_ai", "openrouter", "xai", "perplexity", "cohere", "azure",
-    "volcengine", "moonshot", "zhipuai", "baidu", "dashscope", "ollama",
-    "bedrock", "vertex_ai", "palm", "replicate", "huggingface",
+    "together_ai", "openrouter", "xai", "perplexity", "cohere",
+    # 云厂商
+    "azure", "bedrock", "vertex_ai",
+    # 国内
+    "volcengine", "moonshot", "zhipuai", "zai", "baidu", "dashscope",
+    "minimax", "qianfan", "spark", "hunyuan",
+    # 本地/开源
+    "ollama", "palm", "replicate", "huggingface",
+    # 其他已知
+    "ai21", "nlp_cloud", "aleph_alpha", "petals", "anyscale", "voyage",
+    "openllm", "oobabooga",
 })
 
 
