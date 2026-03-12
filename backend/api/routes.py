@@ -634,3 +634,131 @@ async def get_session_tool_overrides(request: Request, session_id: str):
         "session_id": session_id,
         "tool_overrides": meta.get("tool_overrides", {}),
     }
+
+
+# ── MCP 服务器管理接口 ────────────────────────────────────────────────────────
+
+
+class MCPServerCreate(BaseModel):
+    name: str
+    display_name: str
+    transport: str = "stdio"
+    command: str = ""          # stdio: 可执行文件，如 "npx"
+    args: list[str] = []       # stdio: 参数列表，如 ["-y", "xxx@latest"]
+    url: str | None = None     # sse: 服务地址
+    env: dict[str, str] = {}
+    enabled: bool = True
+
+
+class MCPServerUpdate(BaseModel):
+    display_name: str | None = None
+    transport: str | None = None
+    command: str | None = None
+    args: list[str] | None = None
+    url: str | None = None
+    env: dict[str, str] | None = None
+    enabled: bool | None = None
+
+
+def _mcp_server_with_status(server: dict, request: Request) -> dict:
+    """合并数据库配置 + 运行时连接状态。"""
+    mcp_manager = getattr(request.app.state, "mcp_manager", None)
+    if mcp_manager:
+        status = mcp_manager.get_status(server["name"])
+    else:
+        status = {"status": "disconnected", "error_msg": None, "tools_count": 0}
+    return {**server, **status}
+
+
+@router.get("/mcp-servers")
+async def list_mcp_servers(request: Request):
+    """列出所有 MCP 服务器配置及当前连接状态。"""
+    db = request.app.state.agent.memory.db
+    servers = await db.list_mcp_servers()
+    return {"servers": [_mcp_server_with_status(s, request) for s in servers]}
+
+
+@router.post("/mcp-servers")
+async def create_mcp_server(request: Request, body: MCPServerCreate):
+    """新增 MCP 服务器配置，若 enabled=true 则立即尝试连接。"""
+    db = request.app.state.agent.memory.db
+    server = await db.create_mcp_server(
+        name=body.name,
+        display_name=body.display_name,
+        transport=body.transport,
+        command=body.command,
+        args=body.args,
+        url=body.url,
+        env=body.env,
+        enabled=body.enabled,
+    )
+    if body.enabled:
+        mcp_manager = getattr(request.app.state, "mcp_manager", None)
+        if mcp_manager:
+            await mcp_manager.connect(server)
+    return _mcp_server_with_status(server, request)
+
+
+@router.put("/mcp-servers/{server_id}")
+async def update_mcp_server(request: Request, server_id: int, body: MCPServerUpdate):
+    """更新 MCP 服务器配置，若已连接则自动重连。"""
+    db = request.app.state.agent.memory.db
+    updates = body.model_dump(exclude_none=True)
+    server = await db.update_mcp_server(server_id, **updates)
+    if not server:
+        raise HTTPException(status_code=404, detail="MCP 服务器不存在")
+    mcp_manager = getattr(request.app.state, "mcp_manager", None)
+    if mcp_manager:
+        if server.get("enabled"):
+            await mcp_manager.reconnect(server)
+        else:
+            await mcp_manager.disconnect(server["name"])
+    return _mcp_server_with_status(server, request)
+
+
+@router.delete("/mcp-servers/{server_id}")
+async def delete_mcp_server(request: Request, server_id: int):
+    """删除 MCP 服务器配置，同时断开连接并注销其工具。"""
+    db = request.app.state.agent.memory.db
+    server = await db.get_mcp_server(server_id)
+    if not server:
+        raise HTTPException(status_code=404, detail="MCP 服务器不存在")
+    mcp_manager = getattr(request.app.state, "mcp_manager", None)
+    if mcp_manager:
+        await mcp_manager.disconnect(server["name"])
+    ok = await db.delete_mcp_server(server_id)
+    if not ok:
+        raise HTTPException(status_code=404, detail="MCP 服务器不存在")
+    return {"ok": True}
+
+
+@router.post("/mcp-servers/{server_id}/reconnect")
+async def reconnect_mcp_server(request: Request, server_id: int):
+    """手动重连指定 MCP 服务器。"""
+    db = request.app.state.agent.memory.db
+    server = await db.get_mcp_server(server_id)
+    if not server:
+        raise HTTPException(status_code=404, detail="MCP 服务器不存在")
+    mcp_manager = getattr(request.app.state, "mcp_manager", None)
+    if not mcp_manager:
+        raise HTTPException(status_code=503, detail="MCP 管理器未初始化")
+    success = await mcp_manager.reconnect(server)
+    return _mcp_server_with_status(server, request) | {"reconnect_ok": success}
+
+
+@router.post("/mcp-servers/{server_id}/toggle")
+async def toggle_mcp_server(request: Request, server_id: int):
+    """启用 / 禁用 MCP 服务器（同时连接或断开）。"""
+    db = request.app.state.agent.memory.db
+    server = await db.get_mcp_server(server_id)
+    if not server:
+        raise HTTPException(status_code=404, detail="MCP 服务器不存在")
+    new_enabled = not bool(server.get("enabled"))
+    server = await db.update_mcp_server(server_id, enabled=new_enabled)
+    mcp_manager = getattr(request.app.state, "mcp_manager", None)
+    if mcp_manager:
+        if new_enabled:
+            await mcp_manager.connect(server)
+        else:
+            await mcp_manager.disconnect(server["name"])
+    return _mcp_server_with_status(server, request)

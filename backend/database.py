@@ -108,6 +108,22 @@ async def init_db():
             created_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             updated_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         );
+
+        -- MCP 服务器配置表（支持热插拔）
+        -- command/args 对应标准 MCP JSON 格式：{"command": "npx", "args": [...]}
+        CREATE TABLE IF NOT EXISTS mcp_servers (
+            id           INTEGER PRIMARY KEY AUTOINCREMENT,
+            name         TEXT NOT NULL UNIQUE,
+            display_name TEXT NOT NULL,
+            transport    TEXT NOT NULL DEFAULT 'stdio',
+            command      TEXT,
+            args         TEXT DEFAULT '[]',
+            url          TEXT,
+            env          TEXT DEFAULT '{}',
+            enabled      INTEGER DEFAULT 1,
+            created_at   TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at   TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );
     """)
     await _db.commit()
 
@@ -400,6 +416,90 @@ class DBManager:
                    updated_at = CURRENT_TIMESTAMP""",
             (key, value),
         )
+
+    # ── MCP 服务器配置 CRUD ─────────────────────────────────────────────────
+
+    def _parse_mcp_server(self, row: dict) -> dict:
+        # command 是可执行文件路径（字符串）
+        row["command"] = row.get("command") or ""
+        try:
+            row["args"] = json.loads(row.get("args") or "[]")
+        except Exception:
+            row["args"] = []
+        try:
+            row["env"] = json.loads(row.get("env") or "{}")
+        except Exception:
+            row["env"] = {}
+        return row
+
+    async def list_mcp_servers(self) -> list[dict]:
+        rows = await self.fetch_all("SELECT * FROM mcp_servers ORDER BY id ASC")
+        return [self._parse_mcp_server(r) for r in rows]
+
+    async def get_mcp_server(self, server_id: int) -> dict | None:
+        row = await self.fetch_one("SELECT * FROM mcp_servers WHERE id = ?", (server_id,))
+        return self._parse_mcp_server(row) if row else None
+
+    async def get_mcp_server_by_name(self, name: str) -> dict | None:
+        row = await self.fetch_one("SELECT * FROM mcp_servers WHERE name = ?", (name,))
+        return self._parse_mcp_server(row) if row else None
+
+    async def create_mcp_server(
+        self,
+        name: str,
+        display_name: str,
+        transport: str = "stdio",
+        command: str | None = None,
+        args: list | None = None,
+        url: str | None = None,
+        env: dict | None = None,
+        enabled: bool = True,
+    ) -> dict:
+        cursor = await self.execute(
+            """INSERT INTO mcp_servers (name, display_name, transport, command, args, url, env, enabled)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                name, display_name, transport,
+                command or "",
+                json.dumps(args or [], ensure_ascii=False),
+                url,
+                json.dumps(env or {}, ensure_ascii=False),
+                1 if enabled else 0,
+            ),
+        )
+        return await self.get_mcp_server(cursor.lastrowid)
+
+    async def update_mcp_server(self, server_id: int, **fields) -> dict | None:
+        allowed = {"name", "display_name", "transport", "command", "args", "url", "env", "enabled"}
+        updates: dict = {}
+        for k, v in fields.items():
+            if k not in allowed:
+                continue
+            if k == "args":
+                updates[k] = json.dumps(v or [], ensure_ascii=False)
+            elif k == "env":
+                updates[k] = json.dumps(v or {}, ensure_ascii=False)
+            elif k == "enabled":
+                updates[k] = 1 if v else 0
+            else:
+                updates[k] = v
+        if not updates:
+            return await self.get_mcp_server(server_id)
+        updates["updated_at"] = "CURRENT_TIMESTAMP"
+        set_clause = ", ".join(
+            f"{k} = CURRENT_TIMESTAMP" if v == "CURRENT_TIMESTAMP" else f"{k} = ?"
+            for k, v in updates.items()
+        )
+        values = [v for v in updates.values() if v != "CURRENT_TIMESTAMP"]
+        await self.execute(
+            f"UPDATE mcp_servers SET {set_clause} WHERE id = ?",
+            (*values, server_id),
+        )
+        return await self.get_mcp_server(server_id)
+
+    async def delete_mcp_server(self, server_id: int) -> bool:
+        cursor = await self.execute("DELETE FROM mcp_servers WHERE id = ?", (server_id,))
+        return cursor.rowcount > 0
 
     # ── 会话元数据 ──────────────────────────────────────────────────────────
 

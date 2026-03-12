@@ -1,6 +1,5 @@
 import asyncio
 import json
-from contextlib import AsyncExitStack
 from pathlib import Path
 from loguru import logger
 
@@ -185,12 +184,11 @@ class AgentLoop:
 
     @classmethod
     async def create(cls, config, db_manager) -> "AgentLoop":
-        """工厂方法：初始化所有组件并返回 AgentLoop 实例。"""
+        """工厂方法：初始化所有组件并返回 AgentLoop 实例。MCP 连接由外部 MCPManager 管理。"""
         from ..providers.litellm_provider import LiteLLMProvider
         from ..tools.filesystem import ReadFileTool, WriteFileTool, EditFileTool, ListDirTool
         from ..tools.shell import ExecTool
         from ..tools.web import WebSearchTool, DuckDuckGoSearchTool, WebFetchTool
-        from ..tools.mcp_client import connect_mcp_servers
 
         workspace = Path(config.workspace)
         workspace.mkdir(parents=True, exist_ok=True)
@@ -215,20 +213,6 @@ class AgentLoop:
             tools.register(WebSearchTool(config.tools.brave_api_key))
         tools.register(DuckDuckGoSearchTool())
         tools.register(WebFetchTool())
-
-        exit_stack = AsyncExitStack()
-        if config.mcp_servers:
-            mcp_configs = [
-                {
-                    "name": s.name,
-                    "transport": s.transport,
-                    "command": s.command,
-                    "url": s.url,
-                    "env": s.env,
-                }
-                for s in config.mcp_servers
-            ]
-            await connect_mcp_servers(mcp_configs, tools, exit_stack)
 
         return cls(
             provider=provider,

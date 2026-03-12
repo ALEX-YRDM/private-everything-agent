@@ -106,5 +106,21 @@ class ToolRegistry:
         except Exception as e:
             return f"[执行错误] {type(e).__name__}: {e}\n{traceback.format_exc()[-500:]}"
 
+    def unregister(self, name: str) -> bool:
+        """注销指定工具，返回是否成功（工具不存在则返回 False）。"""
+        if name in self._tools:
+            del self._tools[name]
+            self._globally_disabled.discard(name)
+            logger.debug(f"注销工具: {name}")
+            return True
+        return False
+
+    def unregister_by_prefix(self, prefix: str) -> list[str]:
+        """注销所有名称以 prefix 开头的工具，返回已注销的工具名列表。"""
+        to_remove = [n for n in list(self._tools.keys()) if n.startswith(prefix)]
+        for name in to_remove:
+            self.unregister(name)
+        return to_remove
+
     def list_tools(self) -> list[str]:
         return list(self._tools.keys())

@@ -272,6 +272,14 @@ async def lifespan(app: FastAPI):
 
     agent = await AgentLoop.create(config, db)
 
+    # 初始化 MCPManager，从数据库加载并连接已启用的 MCP 服务器
+    from .tools.mcp_client import MCPManager
+    mcp_manager = MCPManager(agent.tools)
+    mcp_servers = await db.list_mcp_servers()
+    for srv in mcp_servers:
+        if srv.get("enabled"):
+            await mcp_manager.connect(srv)
+
     # 从数据库加载默认模型配置（如果有）
     default_cfg = await db.get_default_model_config()
     if default_cfg:
@@ -311,10 +319,12 @@ async def lifespan(app: FastAPI):
     app.state.agent = agent
     app.state.config = config
     app.state.scheduler = scheduler
+    app.state.mcp_manager = mcp_manager
 
     logger.info("Agent 系统启动完成")
     yield
 
+    await mcp_manager.close_all()
     await scheduler.stop()
     await close_db()
     logger.info("Agent 系统已关闭")
