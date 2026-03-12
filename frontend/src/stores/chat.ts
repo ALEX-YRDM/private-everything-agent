@@ -20,14 +20,19 @@ export interface ToolCallDisplay {
   args: Record<string, unknown>
 }
 
+interface SessionState {
+  messages: DisplayMessage[]
+  isStreaming: boolean
+  streamingMessage: DisplayMessage | null
+  loaded: boolean
+}
+
 const TASK_TOOLS = new Set(['create_task', 'delete_task', 'update_task'])
 
 export const useChatStore = defineStore('chat', () => {
   const sessions = ref<Session[]>([])
   const currentSessionId = ref<string | null>(null)
-  const messages = ref<DisplayMessage[]>([])
-  const isStreaming = ref(false)
-  const streamingMessage = ref<DisplayMessage | null>(null)
+  const sessionStates = ref<Record<string, SessionState>>({})
   const wsMap = new Map<string, AgentWebSocket>()
 
   /** 每当任务工具执行完毕，此计数器 +1，供 SchedulerPanel 监听刷新。 */
@@ -38,6 +43,29 @@ export const useChatStore = defineStore('chat', () => {
   const currentSession = computed(() =>
     sessions.value.find((s) => s.id === currentSessionId.value) || null
   )
+
+  // 当前会话的状态，派生自 sessionStates（per-session 状态 Map）
+  const messages = computed(() =>
+    currentSessionId.value ? (sessionStates.value[currentSessionId.value]?.messages ?? []) : []
+  )
+  const isStreaming = computed(() =>
+    currentSessionId.value ? (sessionStates.value[currentSessionId.value]?.isStreaming ?? false) : false
+  )
+  const streamingMessage = computed(() =>
+    currentSessionId.value ? (sessionStates.value[currentSessionId.value]?.streamingMessage ?? null) : null
+  )
+
+  function getSessionState(sessionId: string): SessionState {
+    if (!sessionStates.value[sessionId]) {
+      sessionStates.value[sessionId] = {
+        messages: [],
+        isStreaming: false,
+        streamingMessage: null,
+        loaded: false,
+      }
+    }
+    return sessionStates.value[sessionId]
+  }
 
   async function loadSessions() {
     try {
@@ -58,9 +86,12 @@ export const useChatStore = defineStore('chat', () => {
   async function deleteSession(id: string) {
     await api.sessions.delete(id)
     sessions.value = sessions.value.filter((s) => s.id !== id)
+    wsMap.get(id)?.disconnect()
+    wsMap.delete(id)
+    delete sessionStates.value[id]
+
     if (currentSessionId.value === id) {
       currentSessionId.value = null
-      messages.value = []
       const first = sessions.value[0]
       if (first) {
         await switchSession(first.id)
@@ -71,15 +102,17 @@ export const useChatStore = defineStore('chat', () => {
   async function switchSession(id: string) {
     if (currentSessionId.value === id) return
     currentSessionId.value = id
-    messages.value = []
-    streamingMessage.value = null
-    isStreaming.value = false
 
-    try {
-      const data = await api.sessions.getMessages(id)
-      messages.value = convertMessages(data.messages)
-    } catch (e) {
-      console.error('加载消息失败', e)
+    const state = getSessionState(id)
+    // 只有未加载过才从 API 拉取，已加载（包括正在流式中的）直接复用
+    if (!state.loaded) {
+      try {
+        const data = await api.sessions.getMessages(id)
+        state.messages = convertMessages(data.messages)
+        state.loaded = true
+      } catch (e) {
+        console.error('加载消息失败', e)
+      }
     }
 
     connectWS(id)
@@ -87,8 +120,6 @@ export const useChatStore = defineStore('chat', () => {
 
   function convertMessages(rawMessages: Message[]): DisplayMessage[] {
     const result: DisplayMessage[] = []
-    const tcMap = new Map<string, ToolCallDisplay[]>()
-    const trMap = new Map<string, Record<string, string>>()
 
     for (const m of rawMessages) {
       if (m.role === 'assistant') {
@@ -118,10 +149,6 @@ export const useChatStore = defineStore('chat', () => {
           timestamp: new Date(m.created_at).getTime(),
         }
         result.push(msg)
-        if (toolCalls.length > 0) {
-          tcMap.set(`msg-${m.id}`, toolCalls)
-          trMap.set(`msg-${m.id}`, {})
-        }
       } else if (m.role === 'tool' && m.tool_call_id) {
         const toolCallId = m.tool_call_id
         for (let i = result.length - 1; i >= 0; i--) {
@@ -143,6 +170,21 @@ export const useChatStore = defineStore('chat', () => {
     return result
   }
 
+  function flushStreamingMessage(sessionId: string) {
+    const state = getSessionState(sessionId)
+    if (
+      state.streamingMessage &&
+      (state.streamingMessage.content || (state.streamingMessage.toolCalls?.length ?? 0) > 0)
+    ) {
+      state.streamingMessage.isStreaming = false
+      state.messages.push({ ...state.streamingMessage })
+      state.streamingMessage = null
+    } else {
+      state.streamingMessage = null
+    }
+    state.isStreaming = false
+  }
+
   function connectWS(sessionId: string) {
     const existing = wsMap.get(sessionId)
     if (existing?.isConnected) return
@@ -153,17 +195,20 @@ export const useChatStore = defineStore('chat', () => {
     ws.connect(
       (event) => handleStreamEvent(sessionId, event),
       () => {
+        // WS 关闭时，将未完成的流式消息保存下来
+        flushStreamingMessage(sessionId)
         wsMap.delete(sessionId)
       }
     ).catch((e) => console.error('WebSocket 连接失败', e))
   }
 
   function handleStreamEvent(sessionId: string, event: StreamEvent) {
-    if (sessionId !== currentSessionId.value) return
+    // 始终更新对应 session 的状态，不再因为非当前 session 而忽略事件
+    const state = getSessionState(sessionId)
 
     if (event.type === 'content_delta') {
-      if (!streamingMessage.value) {
-        streamingMessage.value = {
+      if (!state.streamingMessage) {
+        state.streamingMessage = {
           id: `streaming-${Date.now()}`,
           role: 'assistant',
           content: '',
@@ -173,10 +218,10 @@ export const useChatStore = defineStore('chat', () => {
           timestamp: Date.now(),
         }
       }
-      streamingMessage.value.content += event.content
+      state.streamingMessage.content += event.content
     } else if (event.type === 'thinking') {
-      if (!streamingMessage.value) {
-        streamingMessage.value = {
+      if (!state.streamingMessage) {
+        state.streamingMessage = {
           id: `streaming-${Date.now()}`,
           role: 'assistant',
           content: '',
@@ -187,10 +232,10 @@ export const useChatStore = defineStore('chat', () => {
           timestamp: Date.now(),
         }
       }
-      streamingMessage.value.reasoning = (streamingMessage.value.reasoning || '') + event.content
+      state.streamingMessage.reasoning = (state.streamingMessage.reasoning || '') + event.content
     } else if (event.type === 'tool_call') {
-      if (!streamingMessage.value) {
-        streamingMessage.value = {
+      if (!state.streamingMessage) {
+        state.streamingMessage = {
           id: `streaming-${Date.now()}`,
           role: 'assistant',
           content: '',
@@ -200,77 +245,85 @@ export const useChatStore = defineStore('chat', () => {
           timestamp: Date.now(),
         }
       }
-      streamingMessage.value.toolCalls!.push({
+      state.streamingMessage.toolCalls!.push({
         id: event.id,
         name: event.name,
         args: event.args,
       })
     } else if (event.type === 'tool_result') {
-      // 找到最后一个有相同 name 的工具调用，把结果写入
-      if (streamingMessage.value?.toolCalls) {
-        const tc = [...streamingMessage.value.toolCalls].reverse().find((t) => t.name === event.name)
+      if (state.streamingMessage?.toolCalls) {
+        const tc = [...state.streamingMessage.toolCalls].reverse().find((t) => t.name === event.name)
         if (tc) {
-          streamingMessage.value.toolResults![tc.id] = event.content
+          state.streamingMessage.toolResults![tc.id] = event.content
         }
       }
-      // 任务工具执行完毕 → 通知 SchedulerPanel 刷新
       if (TASK_TOOLS.has(event.name)) {
         tasksChangedAt.value++
       }
     } else if (event.type === 'done') {
-      if (streamingMessage.value) {
-        streamingMessage.value.isStreaming = false
-        messages.value.push({ ...streamingMessage.value })
-        streamingMessage.value = null
+      if (state.streamingMessage) {
+        state.streamingMessage.isStreaming = false
+        state.messages.push({ ...state.streamingMessage })
+        state.streamingMessage = null
       }
-      isStreaming.value = false
-
-      // 刷新会话列表（更新 updated_at）
+      state.isStreaming = false
       loadSessions()
     } else if (event.type === 'error') {
-      isStreaming.value = false
-      streamingMessage.value = null
+      state.isStreaming = false
+      state.streamingMessage = null
       console.error('Agent 错误:', event.message)
+    } else if (event.type === 'session_title') {
+      // 自动更新会话标题
+      const session = sessions.value.find((s) => s.id === sessionId)
+      if (session) {
+        session.title = event.title
+      }
     } else if (event.type === 'task_notification') {
-      // 定时任务完成通知：触发 SchedulerPanel 刷新
       tasksChangedAt.value++
-      // 将通知暴露给外部（App.vue 用于显示 toast）
       lastTaskNotification.value = event
     }
   }
 
   async function sendMessage(content: string) {
-    if (!currentSessionId.value || isStreaming.value) return
+    const sessionId = currentSessionId.value
+    if (!sessionId) return
 
-    messages.value.push({
+    const state = getSessionState(sessionId)
+    if (state.isStreaming) return
+
+    state.messages.push({
       id: `user-${Date.now()}`,
       role: 'user',
       content,
       timestamp: Date.now(),
     })
 
-    isStreaming.value = true
-    streamingMessage.value = null
+    state.isStreaming = true
+    state.streamingMessage = null
 
-    const sessionId = currentSessionId.value
     let ws = wsMap.get(sessionId)
     if (!ws || !ws.isConnected) {
       ws = new AgentWebSocket(sessionId)
       wsMap.set(sessionId, ws)
       await ws.connect(
         (event) => handleStreamEvent(sessionId, event),
-        () => wsMap.delete(sessionId)
+        () => {
+          flushStreamingMessage(sessionId)
+          wsMap.delete(sessionId)
+        }
       )
     }
     ws.sendMessage(content)
   }
 
   function stopStreaming() {
-    if (!currentSessionId.value) return
-    const ws = wsMap.get(currentSessionId.value)
+    const sessionId = currentSessionId.value
+    if (!sessionId) return
+    const ws = wsMap.get(sessionId)
     ws?.stop()
-    isStreaming.value = false
-    streamingMessage.value = null
+    // 只更新 UI 状态，不清除 streamingMessage
+    // 等待 backend 发送 done 事件后由 handleStreamEvent 统一处理内容保存
+    getSessionState(sessionId).isStreaming = false
   }
 
   async function renameSession(id: string, title: string) {

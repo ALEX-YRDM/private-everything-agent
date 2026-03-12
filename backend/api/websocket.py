@@ -53,7 +53,10 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
                         ):
                             await websocket.send_json(event)
                     except asyncio.CancelledError:
-                        pass
+                        try:
+                            await websocket.send_json({"type": "done", "content": ""})
+                        except Exception:
+                            pass
                     except Exception as e:
                         logger.exception(f"流式响应出错: {e}")
                         try:

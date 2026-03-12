@@ -1,11 +1,12 @@
 <script setup lang="ts">
-import { ref } from 'vue'
+import { ref, computed } from 'vue'
 import { useChatStore } from '../stores/chat'
 import { NButton, NInput, NPopconfirm, NTooltip, NScrollbar } from 'naive-ui'
 
 const chat = useChatStore()
 const editingId = ref<string | null>(null)
 const editingTitle = ref('')
+const searchQuery = ref('')
 
 function startRename(id: string, currentTitle: string) {
   editingId.value = id
@@ -22,6 +23,17 @@ async function confirmRename(id: string) {
 function cancelRename() {
   editingId.value = null
 }
+
+// 按 updated_at 降序排列（API 已排序，这里做前端二次保障），再按搜索词过滤
+const filteredSessions = computed(() => {
+  const q = searchQuery.value.trim().toLowerCase()
+  const sorted = [...chat.sessions].sort((a, b) => {
+    return new Date(b.updated_at ?? b.created_at).getTime() -
+           new Date(a.updated_at ?? a.created_at).getTime()
+  })
+  if (!q) return sorted
+  return sorted.filter((s) => s.title.toLowerCase().includes(q))
+})
 </script>
 
 <template>
@@ -38,9 +50,18 @@ function cancelRename() {
       </NTooltip>
     </div>
 
+    <div class="search-wrapper">
+      <NInput
+        v-model:value="searchQuery"
+        size="small"
+        placeholder="搜索会话..."
+        clearable
+      />
+    </div>
+
     <NScrollbar class="sessions-scroll">
       <div
-        v-for="session in chat.sessions"
+        v-for="session in filteredSessions"
         :key="session.id"
         class="session-item"
         :class="{ active: chat.currentSessionId === session.id }"
@@ -78,9 +99,14 @@ function cancelRename() {
         </template>
       </div>
 
-      <div v-if="chat.sessions.length === 0" class="empty-state">
-        <p>暂无会话</p>
-        <NButton @click="chat.createSession()">创建第一个会话</NButton>
+      <div v-if="filteredSessions.length === 0" class="empty-state">
+        <template v-if="searchQuery">
+          <p>没有找到匹配的会话</p>
+        </template>
+        <template v-else>
+          <p>暂无会话</p>
+          <NButton @click="chat.createSession()">创建第一个会话</NButton>
+        </template>
       </div>
     </NScrollbar>
   </div>
@@ -108,6 +134,11 @@ function cancelRename() {
   font-weight: 600;
   font-size: 14px;
   color: #333;
+}
+
+.search-wrapper {
+  padding: 8px 10px;
+  border-bottom: 1px solid #f0f0f0;
 }
 
 .sessions-scroll {

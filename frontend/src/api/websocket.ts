@@ -5,6 +5,7 @@ export type StreamEvent =
   | { type: 'content_delta'; content: string }
   | { type: 'done'; content: string }
   | { type: 'error'; message: string }
+  | { type: 'session_title'; title: string }
   | { type: 'task_notification'; task_id: number; task_name: string; status: 'success' | 'error'; session_id: string | null; message: string }
 
 const WS_BASE = import.meta.env.VITE_WS_BASE || 'ws://localhost:8000'

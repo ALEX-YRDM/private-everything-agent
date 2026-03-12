@@ -62,6 +62,9 @@ class AgentLoop:
         - {"type": "error", "message": "..."}             出错
         """
         history = await self.sessions.get_history(session_id)
+        # 第一轮对话（标题仍为默认值）时自动生成标题
+        session_row = await self.sessions.get_session(session_id)
+        should_generate_title = (session_row or {}).get("title") == "新会话"
         messages = await self.context.build_messages(history, user_content, session_id)
 
         # 获取会话级工具覆盖配置 + 会话专属模型
@@ -165,6 +168,16 @@ class AgentLoop:
 
             yield {"type": "done", "content": final_content}
 
+            # 首次对话后自动生成会话标题
+            if should_generate_title and final_content:
+                try:
+                    title = await self._generate_title(user_content, final_content)
+                    if title:
+                        await self.sessions.update_title(session_id, title)
+                        yield {"type": "session_title", "title": title}
+                except Exception as e:
+                    logger.warning(f"生成会话标题失败: {e}")
+
         except asyncio.CancelledError:
             logger.info(f"会话 {session_id} 的流式响应被取消")
             raise
@@ -181,6 +194,28 @@ class AgentLoop:
                     session_id, messages, self.provider, self.model
                 )
             )
+
+    async def _generate_title(self, user_message: str, ai_response: str) -> str:
+        """基于首轮对话内容生成简洁的会话标题。"""
+        prompt = (
+            "根据以下对话，生成一个简洁的中文标题（不超过15个字，只输出标题本身，不要引号或标点）：\n\n"
+            f"用户：{user_message[:300]}\n"
+            f"助手：{ai_response[:300]}\n\n"
+            "标题："
+        )
+        title = ""
+        async for event in self.provider.chat_stream(
+            messages=[{"role": "user", "content": prompt}],
+            tools=None,
+            model=self.model,
+            temperature=0.3,
+            max_tokens=30,
+        ):
+            if event.type == "content_delta":
+                title += event.content
+            elif event.type in ("done", "error"):
+                break
+        return title.strip().strip('"').strip("'")[:20]
 
     @classmethod
     async def create(cls, config, db_manager) -> "AgentLoop":
