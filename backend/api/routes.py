@@ -25,6 +25,8 @@ class ProviderKeyUpsert(BaseModel):
 class ModelConfigCreate(BaseModel):
     name: str
     model_id: str
+    api_key: str | None = None
+    api_base: str | None = None
     temperature: float = 0.1
     max_tokens: int = 4096
 
@@ -182,38 +184,70 @@ class SessionModelRequest(BaseModel):
 
 @router.put("/sessions/{session_id}/model")
 async def set_session_model(request: Request, session_id: str, body: SessionModelRequest):
-    """设置/清除会话专属模型（不影响全局默认模型）。"""
+    """
+    设置/清除会话专属模型（不影响全局默认模型）。
+    兼容前端既可能传 {"model": "..."}，也可能传 {"model_id": "..."} 的情况。
+    """
     agent = request.app.state.agent
     session = await agent.sessions.get_session(session_id)
     if not session:
         raise HTTPException(status_code=404, detail="会话不存在")
+
+    model = body.model
+    if model is None:
+        # 兼容老的 / 不同实现的请求体
+        raw = await request.json()
+        model = raw.get("model_id")
+
     await agent.memory.db.execute(
         "UPDATE sessions SET model = ? WHERE id = ?",
-        (body.model, session_id),
+        (model, session_id),
     )
-    return {"session_id": session_id, "model": body.model}
+    return {"session_id": session_id, "model": model}
 
 
 @router.get("/models")
-async def list_models():
-    """列出支持的模型。"""
-    models = [
-        {"id": "gpt-4o", "provider": "OpenAI"},
-        {"id": "gpt-4o-mini", "provider": "OpenAI"},
-        {"id": "o1", "provider": "OpenAI"},
-        {"id": "o3-mini", "provider": "OpenAI"},
-        {"id": "claude-3-5-sonnet-20241022", "provider": "Anthropic"},
-        {"id": "claude-3-7-sonnet-20250219", "provider": "Anthropic"},
-        {"id": "deepseek/deepseek-chat", "provider": "DeepSeek"},
-        {"id": "deepseek/deepseek-reasoner", "provider": "DeepSeek"},
-        {"id": "gemini/gemini-2.0-flash", "provider": "Google"},
-        {"id": "gemini/gemini-2.5-pro", "provider": "Google"},
-        {"id": "dashscope/qwen-max", "provider": "阿里云"},
-        {"id": "moonshot/moonshot-v1-128k", "provider": "Kimi"},
-        {"id": "ollama/qwen2.5:14b", "provider": "Ollama（本地）"},
-        {"id": "ollama/llama3.3:70b", "provider": "Ollama（本地）"},
+async def list_models(request: Request):
+    """
+    列出支持的模型。
+    优先从 provider_keys 表中读取（包含自定义 Provider），
+    如果为空则退回到内置静态列表，保证前端始终有可选项。
+    """
+    db = request.app.state.agent.memory.db
+    rows = await db.list_provider_keys()
+    dynamic_models: list[dict] = []
+    for row in rows:
+        provider_name = row.get("display_name") or row.get("provider")
+        for m in row.get("models", []):
+            dynamic_models.append(
+                {
+                    "id": m.get("id"),
+                    "provider": provider_name,
+                    "label": m.get("label") or m.get("id"),
+                }
+            )
+
+    if dynamic_models:
+        return {"models": dynamic_models}
+
+    # 兼容：如果还没有 provider_keys 记录，则返回一份内置模型列表
+    fallback = [
+        {"id": "openai/gpt-4o", "provider": "OpenAI", "label": "GPT-4o"},
+        {"id": "openai/gpt-4o-mini", "provider": "OpenAI", "label": "GPT-4o mini"},
+        {"id": "openai/o1", "provider": "OpenAI", "label": "o1"},
+        {"id": "openai/o3-mini", "provider": "OpenAI", "label": "o3-mini"},
+        {"id": "anthropic/claude-3-5-sonnet-20241022", "provider": "Anthropic", "label": "Claude 3.5 Sonnet"},
+        {"id": "anthropic/claude-3-7-sonnet-20250219", "provider": "Anthropic", "label": "Claude 3.7 Sonnet"},
+        {"id": "deepseek/deepseek-chat", "provider": "DeepSeek", "label": "DeepSeek Chat"},
+        {"id": "deepseek/deepseek-reasoner", "provider": "DeepSeek", "label": "DeepSeek Reasoner"},
+        {"id": "gemini/gemini-2.0-flash", "provider": "Google", "label": "Gemini 2.0 Flash"},
+        {"id": "gemini/gemini-2.5-pro", "provider": "Google", "label": "Gemini 2.5 Pro"},
+        {"id": "dashscope/qwen-max", "provider": "阿里云", "label": "通义千问 Max"},
+        {"id": "moonshot/moonshot-v1-128k", "provider": "Kimi", "label": "Moonshot v1 128K"},
+        {"id": "ollama/qwen2.5:14b", "provider": "Ollama（本地）", "label": "Qwen 2.5 14B"},
+        {"id": "ollama/llama3.3:70b", "provider": "Ollama（本地）", "label": "Llama 3.3 70B"},
     ]
-    return {"models": models}
+    return {"models": fallback}
 
 
 @router.get("/tools")
@@ -360,20 +394,25 @@ async def test_model(request: Request):
     """
     校验指定模型是否可正常调用（发送一条最小请求）。
     返回 {"ok": True} 或 {"ok": False, "error": "..."}，不会抛出 HTTP 错误。
+    支持自定义 / OpenAI 兼容 Provider（使用 LiteLLMProvider 注入 api_key / api_base）。
     """
     import litellm
+    from ..providers.litellm_provider import LiteLLMProvider
     body = await request.json()
     model_id = body.get("model_id", "").strip()
     if not model_id:
         raise HTTPException(status_code=400, detail="缺少 model_id")
 
     try:
-        await litellm.acompletion(
-            model=model_id,
-            messages=[{"role": "user", "content": "hi"}],
+        provider = LiteLLMProvider()
+        # 复用 LiteLLMProvider 的构造逻辑，从 key_manager 注册表中拿到 api_key / api_base
+        kw = provider._build_kwargs(  # noqa: SLF001
+            model_id,
+            messages=[{"role": "user", "content": "1+1="}],
             max_tokens=1,
             stream=False,
         )
+        await litellm.acompletion(**kw)
         return {"ok": True, "model_id": model_id}
     except Exception as e:
         return {"ok": False, "model_id": model_id, "error": str(e)}

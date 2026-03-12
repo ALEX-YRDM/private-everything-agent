@@ -5,6 +5,14 @@ from .base import LLMProvider, LLMResponse, StreamEvent, ToolCallRequest
 
 litellm.set_verbose = False
 
+# LiteLLM 原生支持的 provider（有内置路由，无需特殊处理）
+_NATIVE_PROVIDERS = frozenset({
+    "openai", "anthropic", "gemini", "deepseek", "groq", "mistral",
+    "together_ai", "openrouter", "xai", "perplexity", "cohere", "azure",
+    "volcengine", "moonshot", "zhipuai", "baidu", "dashscope", "ollama",
+    "bedrock", "vertex_ai", "palm", "replicate", "huggingface",
+})
+
 
 class LiteLLMProvider(LLMProvider):
     """
@@ -24,7 +32,7 @@ class LiteLLMProvider(LLMProvider):
         self.api_base = api_base
 
     def _build_kwargs(self, model: str, **kwargs) -> dict:
-        from .key_manager import get_provider_credentials
+        from .key_manager import get_provider_credentials, extract_provider
         kw = {"model": model, **kwargs}
 
         # 从注册表查询该模型 provider 的 key/base（覆盖实例级全局配置）
@@ -36,6 +44,15 @@ class LiteLLMProvider(LLMProvider):
             kw["api_key"] = api_key
         if api_base:
             kw["api_base"] = api_base
+
+        # 自定义（非原生）Provider 且配置了 api_base：
+        # LiteLLM 不认识该 provider 前缀，将 model 重写为 openai/<model_name>
+        # 以强制走 OpenAI 兼容路由（适用于 LM Studio、vLLM、OneAPI 等自定义端点）
+        provider = extract_provider(model)
+        if api_base and provider not in _NATIVE_PROVIDERS:
+            model_name = model.split("/", 1)[1] if "/" in model else model
+            kw["model"] = f"openai/{model_name}"
+
         return kw
 
     async def chat(self, messages, tools=None, model="gpt-4o", **kwargs) -> LLMResponse:

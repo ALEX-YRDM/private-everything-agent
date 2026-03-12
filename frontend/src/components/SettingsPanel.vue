@@ -490,10 +490,10 @@ onMounted(async () => {
       style="margin-bottom:14px;font-size:12px"
       title="接入 OpenAI 兼容的自定义服务"
     >
-      <div>将 <b>Provider ID</b> 设为 <code>openai</code>，在 <b>API Base URL</b> 填入你的服务地址（如 <code>http://localhost:1234/v1</code>），
+      <div>将 <b>Provider ID</b> 设为 <code>openai</code>，在 <b>API Base URL</b> 填入你的服务地址（需包含 <code>/v1</code>，如 <code>http://localhost:1234/v1</code>），
       模型 ID 格式为 <code>openai/你的模型名</code>。</div>
       <div style="margin-top:4px;color:#888">
-        支持 LM Studio、Ollama (openai 模式)、OneAPI、vLLM 等所有 OpenAI 兼容接口。
+        支持 LM Studio、Ollama (openai 模式)、OneAPI、vLLM 等所有 OpenAI 兼容接口（vLLM 示例：<code>http://host:port/v1</code>）。
       </div>
     </NAlert>
 
