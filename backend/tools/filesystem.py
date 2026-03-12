@@ -29,9 +29,22 @@ class ReadFileTool(_WorkspaceMixin, Tool):
         "required": ["path"],
     }
 
-    def __init__(self, workspace: Path, restrict_to_workspace: bool = True):
+    def __init__(self, workspace: Path, restrict_to_workspace: bool = True, extra_read_dirs: list[Path] | None = None):
         self.workspace = workspace
         self.restrict = restrict_to_workspace
+        self.extra_read_dirs: list[Path] = [d.resolve() for d in (extra_read_dirs or [])]
+
+    def _resolve(self, path: str) -> Path:
+        p = Path(path)
+        if not p.is_absolute():
+            p = self.workspace / p
+        resolved = p.resolve()
+        if self.restrict:
+            in_workspace = str(resolved).startswith(str(self.workspace.resolve()))
+            in_extra = any(str(resolved).startswith(str(d)) for d in self.extra_read_dirs)
+            if not in_workspace and not in_extra:
+                raise PermissionError(f"路径 '{path}' 超出允许的读取范围（workspace 或 skills 目录）")
+        return resolved
 
     async def execute(self, path: str, offset: int = None, limit: int = None) -> str:
         p = self._resolve(path)

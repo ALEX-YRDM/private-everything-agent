@@ -14,10 +14,12 @@ class ContextBuilder:
         workspace: Path,
         skills_loader: SkillsLoader,
         memory_manager: MemoryManager,
+        db_manager=None,
     ):
         self.workspace = workspace
         self.skills = skills_loader
         self.memory = memory_manager
+        self.db = db_manager
 
     async def build_system_prompt(self, session_id: str) -> str:
         """构建 System Prompt（静态部分 + 动态记忆）。"""
@@ -34,15 +36,29 @@ class ContextBuilder:
         if memory_ctx:
             parts.append(f"## 长期记忆\n{memory_ctx}")
 
-        always_skills = self.skills.get_always_skills()
-        if always_skills:
-            parts.append(always_skills)
+        # 用户 Skills：懒加载摘要（路径为 workspace 相对路径，模型按需 read_file）
+        user_skills_summary = self.skills.build_user_skills_summary()
+        if user_skills_summary:
+            parts.append(user_skills_summary)
 
-        skills_summary = self.skills.build_skills_summary()
+        # 系统 Skills：按启用状态过滤，生成摘要供懒加载
+        disabled_names = await self._get_disabled_skill_names()
+        all_names = {s.name for s in self.skills.list_system_skills()}
+        enabled_names = all_names - disabled_names
+        skills_summary = self.skills.build_skills_summary(enabled_names)
         if skills_summary:
             parts.append(skills_summary)
 
         return "\n\n---\n\n".join(parts)
+
+    async def _get_disabled_skill_names(self) -> set[str]:
+        """从 DB 取被禁用的系统 Skill 名称集合。DB 不可用时返回空集（全部启用）。"""
+        if self.db is None:
+            return set()
+        try:
+            return await self.db.get_disabled_system_skills()
+        except Exception:
+            return set()
 
     async def build_messages(
         self,
@@ -107,6 +123,8 @@ class ContextBuilder:
             "## 工具选择规范\n"
             "- 读文件 → `read_file`，**不要用** `exec cat`\n"
             "- 查找文件 → `list_dir`，**不要用** `exec find`\n"
+            "- 使用技能 → 直接用技能 `path` 属性中的**绝对路径**调用 `read_file`，"
+            "**不要**在 workspace 中搜索技能文件（技能文件不在工作目录中）\n"
             "- 搜索信息 → 先 `web_search` 获取相关链接，再按需 `web_fetch` 读取详情\n"
             "- 无依赖关系的多个工具可在同一轮并行调用\n"
             "- 工具调用失败 → 分析原因，尝试替代方案，**不要反复重试同一操作**\n\n"

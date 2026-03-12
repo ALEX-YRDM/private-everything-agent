@@ -762,3 +762,61 @@ async def toggle_mcp_server(request: Request, server_id: int):
         else:
             await mcp_manager.disconnect(server["name"])
     return _mcp_server_with_status(server, request)
+
+
+# ── 系统技能管理 ────────────────────────────────────────────────────────────
+
+
+@router.get("/skills/system")
+async def list_system_skills(request: Request):
+    """列出所有系统技能及其启用状态。"""
+    agent = request.app.state.agent
+    db = agent.memory.db
+    skills_loader = agent.context.skills
+
+    all_skills = skills_loader.list_system_skills(filter_unavailable=False)
+    disabled = await db.get_disabled_system_skills()
+
+    result = []
+    for s in all_skills:
+        available = skills_loader._check_requirements(s)
+        result.append({
+            "name": s.name,
+            "description": s.description,
+            "path": str(s.path),
+            "enabled": s.name not in disabled,
+            "available": available,
+            "requires_bins": s.requires_bins,
+            "requires_env": s.requires_env,
+        })
+    return {"skills": result}
+
+
+@router.put("/skills/system/{name}/toggle")
+async def toggle_system_skill(request: Request, name: str):
+    """切换系统技能的启用/禁用状态。"""
+    agent = request.app.state.agent
+    db = agent.memory.db
+    skills_loader = agent.context.skills
+
+    all_names = {s.name for s in skills_loader.list_system_skills(filter_unavailable=False)}
+    if name not in all_names:
+        raise HTTPException(status_code=404, detail=f"系统技能 '{name}' 不存在")
+
+    disabled = await db.get_disabled_system_skills()
+    new_enabled = name in disabled  # 当前禁用 → 启用，当前启用 → 禁用
+    await db.set_skill_enabled(name, new_enabled)
+    return {"name": name, "enabled": new_enabled}
+
+
+@router.get("/skills/user")
+async def list_user_skills(request: Request):
+    """列出用户在 workspace/skills/ 中的自定义技能。"""
+    skills_loader = request.app.state.agent.context.skills
+    user_skills = skills_loader.list_user_skills()
+    return {
+        "skills": [
+            {"name": s.name, "description": s.description, "path": str(s.path)}
+            for s in user_skills
+        ]
+    }

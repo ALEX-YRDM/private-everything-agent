@@ -235,11 +235,15 @@ class AgentLoop:
 
         session_manager = SessionManager(db_manager)
         memory_manager = MemoryManager(db_manager, config.llm.context_window_tokens)
-        skills_loader = SkillsLoader(Path(config.skills_dir))
-        context_builder = ContextBuilder(workspace, skills_loader, memory_manager)
+        system_skills_dir = Path(config.skills_dir).resolve()
+        user_skills_dir = workspace / "skills"
+        skills_loader = SkillsLoader(system_skills_dir, user_skills_dir)
+        context_builder = ContextBuilder(workspace, skills_loader, memory_manager, db_manager)
 
         tools = ToolRegistry()
-        tools.register(ReadFileTool(workspace, config.tools.restrict_to_workspace))
+        # ReadFileTool 额外允许读取系统 Skills 目录（只读，供懒加载 SKILL.md 使用）
+        extra_read_dirs = [system_skills_dir.resolve()] if system_skills_dir.exists() else []
+        tools.register(ReadFileTool(workspace, config.tools.restrict_to_workspace, extra_read_dirs))
         tools.register(WriteFileTool(workspace, config.tools.restrict_to_workspace))
         tools.register(EditFileTool(workspace, config.tools.restrict_to_workspace))
         tools.register(ListDirTool(workspace, config.tools.restrict_to_workspace))
