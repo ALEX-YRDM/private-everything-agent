@@ -125,12 +125,6 @@ async def init_db():
             updated_at   TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         );
 
-        -- 系统技能启用状态（只存禁用项，不在表中 = 默认启用）
-        CREATE TABLE IF NOT EXISTS skill_configs (
-            name       TEXT PRIMARY KEY,
-            enabled    INTEGER NOT NULL DEFAULT 1,
-            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        );
     """)
     await _db.commit()
 
@@ -527,24 +521,3 @@ class DBManager:
             (_json.dumps(metadata, ensure_ascii=False), session_id),
         )
 
-    # ── 系统技能启用状态 ─────────────────────────────────────────────────────
-
-    async def get_disabled_system_skills(self) -> set[str]:
-        """返回被禁用的系统技能名称集合。"""
-        rows = await self.fetch_all("SELECT name FROM skill_configs WHERE enabled = 0")
-        return {r["name"] for r in rows}
-
-    async def list_skill_configs(self) -> list[dict]:
-        """返回所有已有配置记录（含 enabled 状态）。"""
-        return await self.fetch_all("SELECT name, enabled, updated_at FROM skill_configs ORDER BY name")
-
-    async def set_skill_enabled(self, name: str, enabled: bool) -> None:
-        """设置某系统技能的启用状态（upsert）。"""
-        await self.execute(
-            """INSERT INTO skill_configs (name, enabled, updated_at)
-               VALUES (?, ?, CURRENT_TIMESTAMP)
-               ON CONFLICT(name) DO UPDATE SET
-                   enabled = excluded.enabled,
-                   updated_at = CURRENT_TIMESTAMP""",
-            (name, 1 if enabled else 0),
-        )

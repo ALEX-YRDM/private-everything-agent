@@ -1,7 +1,6 @@
 import { ref, computed } from 'vue'
 import { defineStore } from 'pinia'
-import { api, type ModelInfo, type ProviderKey, type SystemSkill, type UserSkill } from '../api/http'
-export type { SystemSkill, UserSkill }
+import { api, type ModelInfo, type ProviderKey } from '../api/http'
 
 export type { ProviderKey }
 
@@ -13,9 +12,6 @@ export const useSettingsStore = defineStore('settings', () => {
   const tools = ref<string[]>([])
   const config = ref<Record<string, unknown>>({})
   const showSettings = ref(false)
-  const systemSkills = ref<SystemSkill[]>([])
-  const userSkills = ref<UserSkill[]>([])
-
   // 从 DB 加载的 provider 列表（含模型）
   const providerGroups = ref<ProviderKey[]>([])
 
@@ -70,26 +66,6 @@ export const useSettingsStore = defineStore('settings', () => {
     }
   }
 
-  async function loadSkills() {
-    try {
-      const [sysData, userData] = await Promise.all([
-        api.skills.listSystem(),
-        api.skills.listUser(),
-      ])
-      systemSkills.value = sysData.skills
-      userSkills.value = userData.skills
-    } catch (e) {
-      console.error('加载技能列表失败', e)
-    }
-  }
-
-  async function toggleSystemSkill(name: string) {
-    const data = await api.skills.toggleSystem(name)
-    const skill = systemSkills.value.find((s) => s.name === name)
-    if (skill) skill.enabled = data.enabled
-    return data
-  }
-
   async function setModel(modelId: string) {
     try {
       await api.models.switch(modelId)
@@ -106,7 +82,7 @@ export const useSettingsStore = defineStore('settings', () => {
   }
 
   async function init() {
-    await Promise.all([loadModels(), loadConfig(), loadTools(), loadProviders(), loadSkills()])
+    await Promise.all([loadModels(), loadConfig(), loadTools(), loadProviders()])
   }
 
   return {
@@ -117,14 +93,10 @@ export const useSettingsStore = defineStore('settings', () => {
     showSettings,
     providerGroups,
     modelSelectOptions,
-    systemSkills,
-    userSkills,
     init,
     setModel,
     loadModels,
     loadProviders,
-    loadSkills,
-    toggleSystemSkill,
   }
 })
 

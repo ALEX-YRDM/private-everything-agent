@@ -29,22 +29,9 @@ class ReadFileTool(_WorkspaceMixin, Tool):
         "required": ["path"],
     }
 
-    def __init__(self, workspace: Path, restrict_to_workspace: bool = True, extra_read_dirs: list[Path] | None = None):
+    def __init__(self, workspace: Path, restrict_to_workspace: bool = True):
         self.workspace = workspace
         self.restrict = restrict_to_workspace
-        self.extra_read_dirs: list[Path] = [d.resolve() for d in (extra_read_dirs or [])]
-
-    def _resolve(self, path: str) -> Path:
-        p = Path(path)
-        if not p.is_absolute():
-            p = self.workspace / p
-        resolved = p.resolve()
-        if self.restrict:
-            in_workspace = str(resolved).startswith(str(self.workspace.resolve()))
-            in_extra = any(str(resolved).startswith(str(d)) for d in self.extra_read_dirs)
-            if not in_workspace and not in_extra:
-                raise PermissionError(f"路径 '{path}' 超出允许的读取范围（workspace 或 skills 目录）")
-        return resolved
 
     async def execute(self, path: str, offset: int = None, limit: int = None) -> str:
         p = self._resolve(path)
@@ -106,6 +93,42 @@ class EditFileTool(_WorkspaceMixin, Tool):
             return f"[错误] 找到 {count} 处匹配，需要提供更多上下文使其唯一"
         p.write_text(content.replace(old_string, new_string, 1), encoding="utf-8")
         return "替换成功"
+
+
+class ReadSkillTool(Tool):
+    name = "read_skill"
+    description = "读取技能（Skill）的完整指导内容。用户技能优先于同名系统技能。"
+    parameters = {
+        "type": "object",
+        "properties": {
+            "name": {"type": "string", "description": "技能名称，与 available_skills 列表中的 name 一致"},
+        },
+        "required": ["name"],
+    }
+
+    def __init__(self, workspace: Path):
+        self.workspace = workspace
+        self.cache_dir = workspace / ".skills_cache"
+        self.user_skills_dir = workspace / "skills"
+
+    async def execute(self, name: str) -> str:
+        # 用户技能优先
+        user_path = self.user_skills_dir / name / "SKILL.md"
+        if user_path.exists():
+            return user_path.read_text(encoding="utf-8")
+
+        # 系统技能缓存
+        cache_path = self.cache_dir / name / "SKILL.md"
+        if cache_path.exists():
+            return cache_path.read_text(encoding="utf-8")
+
+        available: list[str] = []
+        if self.cache_dir.exists():
+            available += [d.name for d in self.cache_dir.iterdir() if d.is_dir()]
+        if self.user_skills_dir.exists():
+            available += [d.name for d in self.user_skills_dir.iterdir() if d.is_dir()]
+        hint = "、".join(sorted(set(available))) or "无"
+        return f"[错误] 技能 '{name}' 不存在。可用技能：{hint}"
 
 
 class ListDirTool(_WorkspaceMixin, Tool):

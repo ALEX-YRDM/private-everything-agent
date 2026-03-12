@@ -20,15 +20,27 @@ class SkillsLoader:
     Skills 是 SKILL.md 文件（带 YAML frontmatter），教导 Agent 如何完成特定任务。
 
     两类 Skills：
-    1. 系统 Skills（system_skills_dir）：随代码发布，用户可在 UI 中按需启用/禁用，
-       启用后以「摘要列表 + 需要时 read_file 懒加载」方式注入 system prompt。
+    1. 系统 Skills（system_skills_dir）：随代码发布，启动时同步到 workspace/.skills_cache/，
+       Agent 通过 read_skill(name=xxx) 按需读取。
     2. 用户 Skills（user_skills_dir，即 workspace/skills/）：用户自建，
-       全部自动注入 system prompt（完整内容）。
+       在 workspace 沙箱内，Agent 同样通过 read_skill(name=xxx) 按需读取，优先级高于系统 Skills。
     """
 
     def __init__(self, system_skills_dir: Path, user_skills_dir: Path | None = None):
         self.system_dir = system_skills_dir if system_skills_dir and system_skills_dir.exists() else None
-        self.user_dir = user_skills_dir if user_skills_dir and user_skills_dir.exists() else None
+        self.user_dir = user_skills_dir  # 不检查存在性，用户随时可创建
+
+    def sync_system_skills(self, workspace: Path) -> None:
+        """启动时将系统 Skills 同步到 workspace/.skills_cache/（只拷贝，不可写）。"""
+        if not self.system_dir:
+            return
+        cache_dir = workspace / ".skills_cache"
+        cache_dir.mkdir(exist_ok=True)
+        for skill_md in self.system_dir.glob("*/SKILL.md"):
+            name = skill_md.parent.name
+            dst = cache_dir / name / "SKILL.md"
+            dst.parent.mkdir(exist_ok=True)
+            shutil.copy2(skill_md, dst)
 
     def list_system_skills(self, filter_unavailable: bool = True) -> list[SkillInfo]:
         """列出所有系统 Skills。"""
@@ -45,7 +57,7 @@ class SkillsLoader:
 
     def list_user_skills(self) -> list[SkillInfo]:
         """列出 workspace/skills/ 中的用户自定义 Skills。"""
-        if not self.user_dir:
+        if not self.user_dir or not self.user_dir.exists():
             return []
         skills = []
         for skill_md in sorted(self.user_dir.glob("*/SKILL.md")):
@@ -54,52 +66,33 @@ class SkillsLoader:
             skills.append(info)
         return skills
 
-    def build_user_skills_summary(self) -> str:
+    def build_skills_summary(self) -> str:
         """
-        生成用户技能摘要（懒加载），路径为相对 workspace 的路径，
-        模型可直接用 read_file 读取。
+        生成技能摘要，注入 system prompt。
+        只含 name 和 description，Agent 通过 read_skill(name=xxx) 按需读取完整内容。
         """
-        skills = self.list_user_skills()
-        if not skills:
-            return ""
-        lines = ["<user_skills>"]
-        lines.append("<!-- 你的自定义技能。需要使用时，用 read_file 读取对应 path（相对工作目录）的完整内容。-->")
-        for s in skills:
-            # 路径相对于 workspace（即 user_dir 的上级目录）
-            try:
-                rel_path = s.path.relative_to(self.user_dir.parent)
-            except ValueError:
-                rel_path = s.path
-            lines.append(f'  <skill name="{s.name}" path="{rel_path}">{s.description}</skill>')
-        lines.append("</user_skills>")
-        return "\n".join(lines)
+        skills = self.list_system_skills()
+        user_skills = self.list_user_skills()
 
-    def build_skills_summary(self, enabled_names: set[str] | None = None) -> str:
-        """
-        生成 XML 格式的系统技能摘要，注入 system prompt。
-        - enabled_names=None 表示全部启用。
-        - Agent 需要使用某技能时，用 read_file 工具读取对应路径的完整 SKILL.md。
-        """
-        all_skills = self.list_system_skills()
-        if enabled_names is not None:
-            skills = [s for s in all_skills if s.name in enabled_names]
-        else:
-            skills = all_skills
-
-        if not skills:
+        if not skills and not user_skills:
             return ""
 
-        # 取第一个技能的绝对路径作为示例
-        example_path = str(skills[0].path) if skills else ""
         lines = ["<available_skills>"]
         lines.append(
-            "<!-- 系统技能使用说明：\n"
-            "     每个 skill 的 path 属性是绝对路径，直接传给 read_file 即可读取完整内容。\n"
-            f'     示例：read_file(path="{example_path}")\n'
-            "     ⚠️ 不要在 workspace 里搜索，skill 文件不在工作目录中。-->"
+            "<!-- 需要使用某技能时，调用 read_skill(name=\"技能名称\") 读取完整指导内容，再按指导执行。\n"
+            "     用户技能（user）与系统技能（system）同名时，用户技能优先。-->"
         )
-        for s in skills:
-            lines.append(f'  <skill name="{s.name}" path="{s.path}">{s.description}</skill>')
+
+        if skills:
+            lines.append("  <!-- 系统技能 -->")
+            for s in skills:
+                lines.append(f'  <skill name="{s.name}" scope="system">{s.description}</skill>')
+
+        if user_skills:
+            lines.append("  <!-- 用户技能 -->")
+            for s in user_skills:
+                lines.append(f'  <skill name="{s.name}" scope="user">{s.description}</skill>')
+
         lines.append("</available_skills>")
         return "\n".join(lines)
 

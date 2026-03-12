@@ -287,18 +287,6 @@ async function toggleGlobal(toolName: string) {
   } catch (e) { message.error(String(e)) } finally { togglingTool.value = null }
 }
 
-// ── 系统技能管理 ─────────────────────────────────────────────────────────────
-const togglingSkill = ref<string | null>(null)
-
-async function toggleSkill(name: string) {
-  togglingSkill.value = name
-  try {
-    await settings.toggleSystemSkill(name)
-    message.success(`技能「${name}」已${settings.systemSkills.find(s => s.name === name)?.enabled ? '启用' : '禁用'}`)
-  } catch (e) { message.error(String(e)) }
-  finally { togglingSkill.value = null }
-}
-
 // ── MCP 服务器管理 ────────────────────────────────────────────────────────────
 const mcpServers = ref<MCPServer[]>([])
 const showMcpModal = ref(false)
@@ -747,91 +735,7 @@ onMounted(async () => {
           </div>
         </NTabPane>
 
-        <!-- Tab 5: 技能管理 -->
-        <NTabPane name="skills" tab="⚡ 技能">
-          <div class="section">
-            <div class="section-header">
-              <div>
-                <h4 style="margin:0">系统技能（{{ settings.systemSkills.length }}）</h4>
-                <p class="hint" style="margin:4px 0 0">
-                  启用后模型可按需调用，技能文件自动加载。禁用后从提示词中移除。
-                </p>
-              </div>
-            </div>
-          </div>
-
-          <NEmpty
-            v-if="settings.systemSkills.length === 0"
-            description="暂无系统技能"
-            style="margin: 24px 0"
-          />
-
-          <div v-else class="skill-list">
-            <div
-              v-for="skill in settings.systemSkills"
-              :key="skill.name"
-              class="skill-row"
-            >
-              <div class="skill-info">
-                <div class="skill-title-row">
-                  <code class="skill-name">{{ skill.name }}</code>
-                  <NTag size="tiny" :type="skill.enabled ? 'success' : 'default'">
-                    {{ skill.enabled ? '已启用' : '已禁用' }}
-                  </NTag>
-                  <NTag v-if="!skill.available" size="tiny" type="warning">
-                    依赖缺失
-                  </NTag>
-                </div>
-                <p class="skill-desc">{{ skill.description }}</p>
-                <p v-if="skill.requires_bins.length || skill.requires_env.length" class="skill-requires">
-                  <span v-if="skill.requires_bins.length">需要命令：{{ skill.requires_bins.join(', ') }}</span>
-                  <span v-if="skill.requires_env.length">需要环境变量：{{ skill.requires_env.join(', ') }}</span>
-                </p>
-              </div>
-              <NTooltip>
-                <template #trigger>
-                  <NSwitch
-                    :value="skill.enabled"
-                    :loading="togglingSkill === skill.name"
-                    @update:value="toggleSkill(skill.name)"
-                  />
-                </template>
-                {{ skill.enabled ? '点击禁用' : '点击启用' }}
-              </NTooltip>
-            </div>
-          </div>
-
-          <div class="section" style="margin-top:24px">
-            <div>
-              <h4 style="margin:0">用户自定义技能（{{ settings.userSkills.length }}）</h4>
-              <p class="hint" style="margin:4px 0 0">
-                放在 <code>workspace/skills/</code> 目录下，每个子目录含一个 <code>SKILL.md</code>，自动全量注入到对话中。
-              </p>
-            </div>
-            <NEmpty
-              v-if="settings.userSkills.length === 0"
-              description="workspace/skills/ 下暂无自定义技能"
-              style="margin: 12px 0"
-            />
-            <div v-else class="skill-list">
-              <div
-                v-for="skill in settings.userSkills"
-                :key="skill.name"
-                class="skill-row"
-              >
-                <div class="skill-info">
-                  <div class="skill-title-row">
-                    <code class="skill-name">{{ skill.name }}</code>
-                    <NTag size="tiny" type="success">已注入</NTag>
-                  </div>
-                  <p class="skill-desc">{{ skill.description }}</p>
-                </div>
-              </div>
-            </div>
-          </div>
-        </NTabPane>
-
-        <!-- Tab 6: 提示词模板 -->
+        <!-- Tab 5: 提示词模板 -->
         <NTabPane name="templates" tab="📋 模板">
           <div class="section">
             <div class="section-header">

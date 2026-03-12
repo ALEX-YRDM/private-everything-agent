@@ -221,7 +221,7 @@ class AgentLoop:
     async def create(cls, config, db_manager) -> "AgentLoop":
         """工厂方法：初始化所有组件并返回 AgentLoop 实例。MCP 连接由外部 MCPManager 管理。"""
         from ..providers.litellm_provider import LiteLLMProvider
-        from ..tools.filesystem import ReadFileTool, WriteFileTool, EditFileTool, ListDirTool
+        from ..tools.filesystem import ReadFileTool, WriteFileTool, EditFileTool, ListDirTool, ReadSkillTool
         from ..tools.shell import ExecTool
         from ..tools.web import WebSearchTool, DuckDuckGoSearchTool, WebFetchTool
 
@@ -238,15 +238,16 @@ class AgentLoop:
         system_skills_dir = Path(config.skills_dir).resolve()
         user_skills_dir = workspace / "skills"
         skills_loader = SkillsLoader(system_skills_dir, user_skills_dir)
+        # 启动时将系统 Skills 同步到 workspace/.skills_cache/，保持沙箱内访问
+        skills_loader.sync_system_skills(workspace)
         context_builder = ContextBuilder(workspace, skills_loader, memory_manager, db_manager)
 
         tools = ToolRegistry()
-        # ReadFileTool 额外允许读取系统 Skills 目录（只读，供懒加载 SKILL.md 使用）
-        extra_read_dirs = [system_skills_dir.resolve()] if system_skills_dir.exists() else []
-        tools.register(ReadFileTool(workspace, config.tools.restrict_to_workspace, extra_read_dirs))
+        tools.register(ReadFileTool(workspace, config.tools.restrict_to_workspace))
         tools.register(WriteFileTool(workspace, config.tools.restrict_to_workspace))
         tools.register(EditFileTool(workspace, config.tools.restrict_to_workspace))
         tools.register(ListDirTool(workspace, config.tools.restrict_to_workspace))
+        tools.register(ReadSkillTool(workspace))
         tools.register(ExecTool(workspace, config.tools.shell_timeout))
         if config.tools.brave_api_key:
             tools.register(WebSearchTool(config.tools.brave_api_key))
