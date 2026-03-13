@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, nextTick, watch } from 'vue'
+import { ref, computed, nextTick, watch, onMounted, onUnmounted } from 'vue'
 import {
   NInput, NButton, NScrollbar, NSpin, NEmpty, NTooltip,
   NPopover, NDivider, NSwitch, NTag, NSelect,
@@ -22,15 +22,48 @@ const allMessages = computed(() => {
   return msgs
 })
 
-function scrollToBottom() {
+// ── 智能滚动：用户向上翻时不强制滚到底部 ─────────────────────────────────────
+const isUserScrolledUp = ref(false)
+let scrollContainer: HTMLElement | null = null
+
+function getScrollContainer(): HTMLElement | null {
+  const inst = scrollbarRef.value as any
+  // NScrollbar 暴露 containerRef（HTMLElement）；降级到内部 CSS 类
+  return inst?.containerRef ?? inst?.$el?.querySelector('.n-scrollbar-container') ?? null
+}
+
+function handleScroll() {
+  const el = scrollContainer
+  if (!el) return
+  const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight
+  isUserScrolledUp.value = distanceFromBottom > 150
+}
+
+onMounted(() => {
+  nextTick(() => {
+    scrollContainer = getScrollContainer()
+    scrollContainer?.addEventListener('scroll', handleScroll, { passive: true })
+  })
+})
+
+onUnmounted(() => {
+  scrollContainer?.removeEventListener('scroll', handleScroll)
+})
+
+function scrollToBottom(force = false) {
+  if (!force && isUserScrolledUp.value) return
   nextTick(() => scrollbarRef.value?.scrollTo({ top: 999999, behavior: 'smooth' }))
 }
-watch(allMessages, scrollToBottom, { deep: true })
+
+// 每次消息更新时，若用户没有向上翻则自动跟踪到底部
+watch(allMessages, () => scrollToBottom(), { deep: true })
 
 async function sendMessage() {
   const content = inputText.value.trim()
   if (!content || chat.isStreaming) return
   inputText.value = ''
+  isUserScrolledUp.value = false   // 用户主动发消息，强制回到底部
+  scrollToBottom(true)
   await chat.sendMessage(content)
 }
 
@@ -292,7 +325,7 @@ loadTemplates()
           v-model:show="showToolPanel"
           trigger="click"
           placement="top-start"
-          :style="{ width: '360px', maxHeight: '460px' }"
+          :style="{ width: '440px', maxHeight: '500px' }"
           scrollable
         >
           <template #trigger>
@@ -320,15 +353,17 @@ loadTemplates()
 
             <div v-for="tool in toolStates" :key="tool.name" class="tool-row">
               <div class="tool-info">
-                <span class="tool-name">{{ tool.name }}</span>
+                <span class="tool-name" :title="tool.name">{{ tool.name }}</span>
                 <NTag
                   size="tiny"
                   :type="tool.effective_enabled ? 'success' : 'error'"
+                  style="flex-shrink: 0"
                 >{{ tool.effective_enabled ? '启用' : '禁用' }}</NTag>
                 <NTag
                   v-if="tool.scope !== 'global'"
                   size="tiny"
                   :type="tool.scope === 'session_on' ? 'success' : 'error'"
+                  style="flex-shrink: 0"
                 >会话覆盖</NTag>
               </div>
               <div class="tool-controls">
@@ -567,7 +602,11 @@ loadTemplates()
   font-size: 12px;
   font-family: monospace;
   color: #333;
-  flex-shrink: 0;
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .tool-controls {
