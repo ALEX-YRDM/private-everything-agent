@@ -128,6 +128,7 @@ class AgentLoop:
         new_messages: list[dict] = []
         final_content: str | None = None
         accumulated_content = ""
+        _turn_saved = False   # 标记 save_turn 是否已在 try 块中提前完成
 
         try:
             for iteration in range(self.max_iterations):
@@ -151,8 +152,19 @@ class AgentLoop:
                     elif event.type == "tool_call":
                         yield {"type": "tool_call", **event.data}
 
+                    elif event.type == "tool_call_delta":
+                        yield {"type": "tool_call_delta", **event.data}
+
                     elif event.type == "tool_calls_ready":
                         tool_calls_ready = event.data
+                        # 发送带完整参数的 tool_call 更新事件，让前端更新早先发出的空参数版本
+                        for tc in tool_calls_ready.get("tool_calls", []):
+                            yield {
+                                "type": "tool_call",
+                                "id": tc["id"],
+                                "name": tc["name"],
+                                "args": tc["arguments"],
+                            }
 
                     elif event.type == "done":
                         final_content = event.content or accumulated_content
@@ -254,6 +266,16 @@ class AgentLoop:
                 final_content = f"已达到最大工具调用次数（{self.max_iterations}），任务可能未完成。"
                 yield {"type": "content_delta", "content": final_content}
 
+            # 提前保存，确保 done 事件到达前端后 loadSessions() 能拿到最新 updated_at
+            try:
+                if new_messages:
+                    await self.sessions.save_turn(session_id, user_content, new_messages)
+                elif user_content:
+                    await self.sessions.save_turn(session_id, user_content, [])
+                _turn_saved = True
+            except Exception as _save_err:
+                logger.warning(f"save_turn 提前保存失败，将在 finally 重试: {_save_err}")
+
             yield {"type": "done", "content": final_content}
 
             # 主 Agent 才生成标题
@@ -275,10 +297,12 @@ class AgentLoop:
             logger.exception(f"Agent 处理出错: {e}")
             yield {"type": "error", "message": str(e)}
         finally:
-            if new_messages:
-                await self.sessions.save_turn(session_id, user_content, new_messages)
-            elif user_content:
-                await self.sessions.save_turn(session_id, user_content, [])
+            # 若提前保存已成功则跳过，否则兜底保存（CancelledError / 异常路径）
+            if not _turn_saved:
+                if new_messages:
+                    await self.sessions.save_turn(session_id, user_content, new_messages)
+                elif user_content:
+                    await self.sessions.save_turn(session_id, user_content, [])
 
             # SubAgent 不做全局记忆整合（throwaway session）
             if not is_subagent:

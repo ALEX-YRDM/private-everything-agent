@@ -48,7 +48,9 @@ const icon = computed(() => {
     <div v-if="expanded" class="tool-body">
       <div class="tool-args">
         <div class="section-label">参数</div>
-        <pre>{{ JSON.stringify(toolCall.args, null, 2) }}</pre>
+        <!-- 流式生成阶段显示原始文本，生成完毕后显示格式化 JSON -->
+        <pre v-if="toolCall.streamingArgs !== undefined">{{ toolCall.streamingArgs }}<span class="cursor-blink">▋</span></pre>
+        <pre v-else>{{ JSON.stringify(toolCall.args, null, 2) }}</pre>
       </div>
       <div v-if="result !== undefined" class="tool-result">
         <div class="section-label">结果</div>
@@ -155,5 +157,16 @@ pre {
   font-family: 'SF Mono', 'Monaco', 'Cascadia Code', monospace;
   max-height: 300px;
   overflow-y: auto;
+}
+
+.cursor-blink {
+  display: inline-block;
+  animation: blink 1s step-end infinite;
+  color: #1677ff;
+}
+
+@keyframes blink {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0; }
 }
 </style>

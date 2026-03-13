@@ -22,12 +22,28 @@ const statusText = computed(() => {
   return '执行中…'
 })
 
-// 从内部事件提取工具调用（用于展开显示）
-const toolCallEvents = computed(() =>
-  props.subAgent.events.filter((e): e is Extract<SubAgentInnerEvent, { type: 'tool_call' }> =>
-    e.type === 'tool_call'
-  )
-)
+// 从内部事件提取工具调用（按 id 去重，最新版本优先，避免早期空参与完整参数重复显示）
+const toolCallEvents = computed(() => {
+  const byId = new Map<string, Extract<SubAgentInnerEvent, { type: 'tool_call' }>>()
+  for (const e of props.subAgent.events) {
+    if (e.type === 'tool_call') byId.set(e.id, e)
+  }
+  return [...byId.values()]
+})
+
+// 每个工具调用的流式参数文本（到完整参数后清除）
+const streamingArgsMap = computed(() => {
+  const acc = new Map<string, string>()
+  for (const e of props.subAgent.events) {
+    if (e.type === 'tool_call_delta') {
+      acc.set(e.id, (acc.get(e.id) ?? '') + e.args_delta)
+    }
+    if (e.type === 'tool_call' && Object.keys(e.args).length > 0) {
+      acc.delete(e.id)
+    }
+  }
+  return acc
+})
 
 const contentEvents = computed(() =>
   props.subAgent.events.filter(
@@ -63,7 +79,11 @@ const accumulatedContent = computed(() =>
         <div v-for="tc in toolCallEvents" :key="tc.id" class="inner-tool-call">
           <span class="tool-call-icon">⚙</span>
           <span class="tool-call-name">{{ tc.name }}</span>
-          <span v-if="Object.keys(tc.args).length > 0" class="tool-call-args">
+          <!-- 流式生成参数时显示滚动文本，生成完毕后显示格式化截断 JSON -->
+          <span v-if="streamingArgsMap.has(tc.id)" class="tool-call-args streaming">
+            {{ streamingArgsMap.get(tc.id)?.slice(-60) }}
+          </span>
+          <span v-else-if="Object.keys(tc.args).length > 0" class="tool-call-args">
             {{ JSON.stringify(tc.args).slice(0, 80) }}{{ JSON.stringify(tc.args).length > 80 ? '…' : '' }}
           </span>
         </div>
@@ -215,6 +235,11 @@ const accumulatedContent = computed(() =>
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.tool-call-args.streaming {
+  color: #1677ff;
+  font-style: italic;
 }
 
 .subagent-result {

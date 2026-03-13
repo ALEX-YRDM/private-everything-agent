@@ -213,6 +213,13 @@ async function setSessionModel(modelId: string | null | undefined) {
   }
 }
 
+// 检测当前会话是否为运行中的子任务（用于空消息列表时的状态提示）
+const isViewingRunningSubAgent = computed(() => {
+  const id = chat.currentSessionId
+  if (!id) return false
+  return chat.getRunningSubAgent(id) !== undefined
+})
+
 // 加载模板
 loadTemplates()
 </script>
@@ -229,8 +236,12 @@ loadTemplates()
     <!-- 消息区域 -->
     <NScrollbar ref="scrollbarRef" class="messages-area">
       <div class="messages-container">
+        <div v-if="allMessages.length === 0 && isViewingRunningSubAgent" class="subagent-running-hint">
+          <NSpin size="medium" />
+          <span>子任务执行中，完成后自动刷新…</span>
+        </div>
         <NEmpty
-          v-if="allMessages.length === 0 && !chat.isStreaming"
+          v-else-if="allMessages.length === 0 && !chat.isStreaming"
           description="发送消息开始对话"
           class="empty-chat"
         />
@@ -506,6 +517,17 @@ loadTemplates()
   align-items: center;
   gap: 8px;
   padding: 8px 0;
+  color: #888;
+  font-size: 13px;
+}
+
+.subagent-running-hint {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  margin-top: 80px;
   color: #888;
   font-size: 13px;
 }

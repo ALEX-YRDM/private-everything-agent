@@ -29,6 +29,7 @@ export interface ToolCallDisplay {
   id: string
   name: string
   args: Record<string, unknown>
+  streamingArgs?: string  // LLM 流式生成参数时的原始文本（参数生成完毕后清空）
 }
 
 interface SessionState {
@@ -118,6 +119,16 @@ export const useChatStore = defineStore('chat', () => {
     }
   }
 
+  /** 检查某个 session 是否是当前正在执行的 SubAgent 子会话 */
+  function getRunningSubAgent(subSessionId: string): SubAgentState | undefined {
+    for (const st of Object.values(sessionStates.value)) {
+      for (const sa of st.activeSubAgents.values()) {
+        if (sa.session_id === subSessionId && sa.status === 'running') return sa
+      }
+    }
+    return undefined
+  }
+
   async function switchSession(id: string) {
     if (currentSessionId.value === id) return
     currentSessionId.value = id
@@ -128,7 +139,12 @@ export const useChatStore = defineStore('chat', () => {
       try {
         const data = await api.sessions.getMessages(id)
         state.messages = convertMessages(data.messages)
-        state.loaded = true
+        // 若该会话是正在运行的子任务且 DB 中还没消息（save_turn 未完成），
+        // 不标记 loaded=true，留给 subagent_done 自动刷新
+        const isRunningEmpty = data.messages.length === 0 && getRunningSubAgent(id) !== undefined
+        if (!isRunningEmpty) {
+          state.loaded = true
+        }
       } catch (e) {
         console.error('加载消息失败', e)
       }
@@ -267,11 +283,24 @@ export const useChatStore = defineStore('chat', () => {
           timestamp: Date.now(),
         }
       }
-      state.streamingMessage.toolCalls!.push({
-        id: event.id,
-        name: event.name,
-        args: event.args,
-      })
+      // 若已存在同 id 的条目（早期空参数占位），则更新参数并清空流式文本；否则新增
+      const existing = state.streamingMessage.toolCalls!.find(t => t.id === event.id)
+      if (existing) {
+        existing.args = event.args
+        existing.streamingArgs = undefined  // 参数生成完毕，清空流式文本
+      } else {
+        state.streamingMessage.toolCalls!.push({
+          id: event.id,
+          name: event.name,
+          args: event.args,
+        })
+      }
+    } else if (event.type === 'tool_call_delta') {
+      // 追加参数增量到流式文本，让用户实时看到参数内容
+      const tc = state.streamingMessage?.toolCalls?.find(t => t.id === event.id)
+      if (tc) {
+        tc.streamingArgs = (tc.streamingArgs ?? '') + event.args_delta
+      }
     } else if (event.type === 'tool_result') {
       if (state.streamingMessage?.toolCalls) {
         const tc = [...state.streamingMessage.toolCalls].reverse().find((t) => t.name === event.name)
@@ -309,16 +338,40 @@ export const useChatStore = defineStore('chat', () => {
       }
       state.streamingMessage.subAgents.push(sa)
     } else if (event.type === 'subagent_event') {
-      const sa = state.activeSubAgents.get(event.subagent_id)
+      // 从响应式数组中查找 sa，确保触发 Vue 响应式更新
+      const sa = state.streamingMessage?.subAgents?.find(s => s.id === event.subagent_id)
       if (sa) {
         sa.events.push(event.event)
       }
     } else if (event.type === 'subagent_done') {
-      const sa = state.activeSubAgents.get(event.subagent_id)
+      // 从响应式数组中查找 sa，确保触发 Vue 响应式更新
+      const sa = state.streamingMessage?.subAgents?.find(s => s.id === event.subagent_id)
       if (sa) {
         sa.status = event.error ? 'failed' : 'completed'
         sa.result = event.result
         sa.error = event.error
+        // 重置该子会话的加载状态，确保下次点击能重新拉取已保存的消息
+        if (sa.session_id) {
+          const subSt = sessionStates.value[sa.session_id]
+          if (subSt) {
+            subSt.loaded = false
+          }
+          // 若用户当前正在查看该子会话，立即重新加载消息
+          if (currentSessionId.value === sa.session_id) {
+            api.sessions.getMessages(sa.session_id).then((data) => {
+              const subState = getSessionState(sa.session_id)
+              subState.messages = convertMessages(data.messages)
+              subState.loaded = true
+            }).catch(() => {})
+          }
+        }
+      }
+      // 同步更新 activeSubAgents（用于兜底）
+      const saMap = state.activeSubAgents.get(event.subagent_id)
+      if (saMap && !state.streamingMessage?.subAgents?.find(s => s.id === event.subagent_id)) {
+        saMap.status = event.error ? 'failed' : 'completed'
+        saMap.result = event.result
+        saMap.error = event.error
       }
     } else if (event.type === 'done') {
       if (state.streamingMessage) {
@@ -328,6 +381,8 @@ export const useChatStore = defineStore('chat', () => {
       }
       state.activeSubAgents.clear()
       state.isStreaming = false
+      // 重置子会话缓存，使 ⚙ 按钮下次展开时能拉取最新子会话列表
+      state.subagentSessionsLoaded = false
       loadSessions()
     } else if (event.type === 'error') {
       state.isStreaming = false
@@ -437,5 +492,6 @@ export const useChatStore = defineStore('chat', () => {
     loadSubagentSessions,
     getSubagentSessions,
     getSessionState,
+    getRunningSubAgent,
   }
 })

@@ -103,13 +103,30 @@ class LiteLLMProvider(LLMProvider):
                 for tc_delta in delta.tool_calls:
                     idx = tc_delta.index
                     if idx not in accumulated_tool_calls:
-                        accumulated_tool_calls[idx] = {"id": "", "name": "", "arguments": ""}
+                        accumulated_tool_calls[idx] = {"id": "", "name": "", "arguments": "", "_emitted": False}
                     if tc_delta.id:
                         accumulated_tool_calls[idx]["id"] = tc_delta.id
                     if tc_delta.function and tc_delta.function.name:
                         accumulated_tool_calls[idx]["name"] = tc_delta.function.name
                     if tc_delta.function and tc_delta.function.arguments:
                         accumulated_tool_calls[idx]["arguments"] += tc_delta.function.arguments
+
+                    tc_acc = accumulated_tool_calls[idx]
+
+                    # 一旦 id 和 name 就绪就立即推送 tool_call，让前端实时显示工具调用
+                    if not tc_acc["_emitted"] and tc_acc["id"] and tc_acc["name"]:
+                        tc_acc["_emitted"] = True
+                        yield StreamEvent(
+                            type="tool_call",
+                            data={"id": tc_acc["id"], "name": tc_acc["name"], "args": {}},
+                        )
+
+                    # 参数增量实时推送，让前端逐字显示正在生成的参数内容
+                    if tc_delta.function and tc_delta.function.arguments and tc_acc["id"]:
+                        yield StreamEvent(
+                            type="tool_call_delta",
+                            data={"id": tc_acc["id"], "args_delta": tc_delta.function.arguments},
+                        )
 
             if finish_reason == "tool_calls":
                 tool_calls = []
@@ -121,10 +138,7 @@ class LiteLLMProvider(LLMProvider):
                     tool_calls.append(
                         ToolCallRequest(id=tc["id"], name=tc["name"], arguments=args)
                     )
-                    yield StreamEvent(
-                        type="tool_call",
-                        data={"id": tc["id"], "name": tc["name"], "args": args},
-                    )
+                # tool_call 事件已在流式过程中提前发出，这里只需发 tool_calls_ready
                 yield StreamEvent(
                     type="tool_calls_ready",
                     data={

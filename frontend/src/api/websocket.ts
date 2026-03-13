@@ -1,6 +1,7 @@
 export type SubAgentInnerEvent =
   | { type: 'thinking'; content: string }
   | { type: 'tool_call'; name: string; id: string; args: Record<string, unknown> }
+  | { type: 'tool_call_delta'; id: string; args_delta: string }
   | { type: 'tool_result'; name: string; content: string }
   | { type: 'content_delta'; content: string }
   | { type: 'done'; content: string }
@@ -15,6 +16,7 @@ export type StreamEvent =
   | { type: 'error'; message: string }
   | { type: 'session_title'; title: string }
   | { type: 'task_notification'; task_id: number; task_name: string; status: 'success' | 'error'; session_id: string | null; message: string }
+  | { type: 'tool_call_delta'; id: string; args_delta: string }
   | { type: 'subagent_start'; subagent_id: string; session_id: string; task: string }
   | { type: 'subagent_event'; subagent_id: string; event: SubAgentInnerEvent }
   | { type: 'subagent_done'; subagent_id: string; result: string; error?: string }
