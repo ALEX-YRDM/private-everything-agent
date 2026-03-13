@@ -82,7 +82,12 @@ class ContextBuilder:
         """工作目录、工具使用判断、回复风格（始终包含）。"""
         return (
             "## 工作目录\n"
-            "- 工作目录：`workspace/`（文件操作均相对此目录）\n\n"
+            "- 工作目录根目录为 `workspace/`，**所有文件路径均相对于此根目录**\n"
+            "- `list_dir()` 或 `list_dir(\".\")` → 列出 workspace/ 根目录\n"
+            "- `read_file(\"README.md\")` → 读取 workspace/README.md\n"
+            "- `write_file(\"notes/todo.md\", ...)` → 写入 workspace/notes/todo.md\n"
+            "- ⚠️ **不要**传入 `\"workspace\"` 或 `\"workspace/foo\"`，会导致路径错误\n"
+            "- 创建用户技能：`write_file(\"skills/<技能名>/SKILL.md\", 内容)`\n\n"
             "## 工具使用判断\n"
             "**不是所有问题都需要工具**，按下列标准智能判断：\n\n"
             "✅ **直接回答**（无需工具）：\n"

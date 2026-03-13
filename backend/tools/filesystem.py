@@ -18,11 +18,11 @@ class _WorkspaceMixin:
 
 class ReadFileTool(_WorkspaceMixin, Tool):
     name = "read_file"
-    description = "读取文件内容。支持指定起始行和行数。"
+    description = "读取文件内容。路径相对于 workspace 根目录（直接用 'README.md'，不要加 'workspace/' 前缀）。支持指定起始行和行数。"
     parameters = {
         "type": "object",
         "properties": {
-            "path": {"type": "string", "description": "文件路径"},
+            "path": {"type": "string", "description": "文件路径，相对于 workspace 根目录，例如：'README.md'、'src/main.py'"},
             "offset": {"type": "integer", "description": "起始行号（1-based，可选）"},
             "limit": {"type": "integer", "description": "读取行数（可选）"},
         },
@@ -45,11 +45,11 @@ class ReadFileTool(_WorkspaceMixin, Tool):
 
 class WriteFileTool(_WorkspaceMixin, Tool):
     name = "write_file"
-    description = "写入文件内容（覆盖模式）。父目录不存在时自动创建。"
+    description = "写入文件内容（覆盖模式）。路径相对于 workspace 根目录，父目录不存在时自动创建。"
     parameters = {
         "type": "object",
         "properties": {
-            "path": {"type": "string"},
+            "path": {"type": "string", "description": "文件路径，相对于 workspace 根目录，例如：'notes/todo.md'、'skills/my-skill/SKILL.md'"},
             "content": {"type": "string"},
         },
         "required": ["path", "content"],
@@ -68,11 +68,11 @@ class WriteFileTool(_WorkspaceMixin, Tool):
 
 class EditFileTool(_WorkspaceMixin, Tool):
     name = "edit_file"
-    description = "精确替换文件中的字符串片段。old_string 必须唯一存在于文件中。"
+    description = "精确替换文件中的字符串片段。路径相对于 workspace 根目录。old_string 必须唯一存在于文件中。"
     parameters = {
         "type": "object",
         "properties": {
-            "path": {"type": "string"},
+            "path": {"type": "string", "description": "文件路径，相对于 workspace 根目录"},
             "old_string": {"type": "string", "description": "要替换的原始文本"},
             "new_string": {"type": "string", "description": "替换后的新文本"},
         },
@@ -133,11 +133,21 @@ class ReadSkillTool(Tool):
 
 class ListDirTool(_WorkspaceMixin, Tool):
     name = "list_dir"
-    description = "列出目录内容，返回文件树形结构。"
+    description = (
+        "列出目录内容，返回树形结构。路径相对于 workspace 根目录（用 '.' 列出根目录，"
+        "不要传 'workspace' 或 'workspace/xxx'）。depth 控制展开层数，默认 2。"
+    )
     parameters = {
         "type": "object",
         "properties": {
-            "path": {"type": "string", "description": "目录路径，默认为 workspace 根目录"},
+            "path": {
+                "type": "string",
+                "description": "目录路径，相对于 workspace 根目录。'.' 表示根目录本身，例如 'src'、'skills'",
+            },
+            "depth": {
+                "type": "integer",
+                "description": "展开层数，默认 2（1 表示仅当前层，3 表示深度三层）",
+            },
         },
     }
 
@@ -145,10 +155,22 @@ class ListDirTool(_WorkspaceMixin, Tool):
         self.workspace = workspace
         self.restrict = restrict_to_workspace
 
-    async def execute(self, path: str = ".") -> str:
+    async def execute(self, path: str = ".", depth: int = 2) -> str:
         p = self._resolve(path)
-        lines = []
-        for item in sorted(p.iterdir()):
-            prefix = "📁 " if item.is_dir() else "📄 "
-            lines.append(f"{prefix}{item.name}")
+        lines: list[str] = []
+        self._render_tree(p, lines, max_depth=max(1, depth), current_depth=0)
         return "\n".join(lines) or "(空目录)"
+
+    def _render_tree(self, p: Path, lines: list[str], max_depth: int, current_depth: int) -> None:
+        indent = "  " * current_depth
+        try:
+            items = sorted(p.iterdir())
+        except PermissionError:
+            return
+        for item in items:
+            if item.is_dir():
+                lines.append(f"{indent}📁 {item.name}/")
+                if current_depth < max_depth - 1:
+                    self._render_tree(item, lines, max_depth, current_depth + 1)
+            else:
+                lines.append(f"{indent}📄 {item.name}")
