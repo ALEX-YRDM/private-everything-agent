@@ -23,25 +23,34 @@ const allMessages = computed(() => {
 })
 
 // ── 智能滚动：用户向上翻时不强制滚到底部 ─────────────────────────────────────
-const isUserScrolledUp = ref(false)
-let scrollContainer: HTMLElement | null = null
+//
+// 实现要点：
+// 1. 通过 messagesEndRef 哨兵元素用 .closest() 可靠地找到 NScrollbar 的滚动容器
+//    （避免直接访问 NScrollbar 暴露的 containerRef，它是 Vue Ref 对象而非 HTMLElement）
+// 2. 用 programmaticScroll 标志位区分代码触发的滚动和用户手动滚动
+// 3. 直接操作 scrollContainer.scrollTop（不用 behavior:'smooth'），
+//    避免平滑动画期间多次触发 scroll 事件把标志位意外重置
 
-function getScrollContainer(): HTMLElement | null {
-  const inst = scrollbarRef.value as any
-  // NScrollbar 暴露 containerRef（HTMLElement）；降级到内部 CSS 类
-  return inst?.containerRef ?? inst?.$el?.querySelector('.n-scrollbar-container') ?? null
-}
+const isUserScrolledUp = ref(false)
+const messagesEndRef = ref<HTMLElement | null>(null)  // 消息列表底部哨兵
+let scrollContainer: HTMLElement | null = null
+let programmaticScroll = false
 
 function handleScroll() {
-  const el = scrollContainer
-  if (!el) return
-  const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight
-  isUserScrolledUp.value = distanceFromBottom > 150
+  // 跳过代码触发的滚动事件
+  if (programmaticScroll) {
+    programmaticScroll = false
+    return
+  }
+  if (!scrollContainer) return
+  const dist = scrollContainer.scrollHeight - scrollContainer.scrollTop - scrollContainer.clientHeight
+  isUserScrolledUp.value = dist > 150
 }
 
 onMounted(() => {
   nextTick(() => {
-    scrollContainer = getScrollContainer()
+    // 从哨兵元素向上遍历 DOM 找到 NScrollbar 的滚动容器（稳定可靠）
+    scrollContainer = messagesEndRef.value?.closest('.n-scrollbar-container') as HTMLElement | null
     scrollContainer?.addEventListener('scroll', handleScroll, { passive: true })
   })
 })
@@ -52,7 +61,11 @@ onUnmounted(() => {
 
 function scrollToBottom(force = false) {
   if (!force && isUserScrolledUp.value) return
-  nextTick(() => scrollbarRef.value?.scrollTo({ top: 999999, behavior: 'smooth' }))
+  nextTick(() => {
+    if (!scrollContainer) return
+    programmaticScroll = true
+    scrollContainer.scrollTop = scrollContainer.scrollHeight  // 即时滚动，不触发动画
+  })
 }
 
 // 每次消息更新时，若用户没有向上翻则自动跟踪到底部
@@ -225,6 +238,8 @@ loadTemplates()
           <NSpin size="small" />
           <span>思考中…</span>
         </div>
+        <!-- 底部哨兵：用于定位 NScrollbar 的滚动容器，不可见 -->
+        <div ref="messagesEndRef" />
       </div>
     </NScrollbar>
 
