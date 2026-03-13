@@ -125,6 +125,15 @@ async def init_db():
             updated_at   TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         );
 
+        -- 全局记忆表（单行 singleton，跨 session 共享，key=1）
+        CREATE TABLE IF NOT EXISTS global_memory (
+            id         INTEGER PRIMARY KEY CHECK (id = 1),
+            memory_md  TEXT DEFAULT '',
+            history_md TEXT DEFAULT '',
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );
+        INSERT OR IGNORE INTO global_memory (id, memory_md, history_md) VALUES (1, '', '');
+
     """)
     await _db.commit()
 
@@ -159,6 +168,12 @@ class DBManager:
         await self.db.commit()
         return cursor
 
+    async def execute_transaction(self, statements: list[tuple[str, tuple]]) -> None:
+        """原子执行多条 SQL 语句（单次 commit）。"""
+        for sql, params in statements:
+            await self.db.execute(sql, params)
+        await self.db.commit()
+
     async def fetch_all(self, sql: str, params: tuple = ()) -> list[dict]:
         cursor = await self.db.execute(sql, params)
         rows = await cursor.fetchall()
@@ -183,6 +198,23 @@ class DBManager:
                history_md = excluded.history_md,
                updated_at = CURRENT_TIMESTAMP""",
             (session_id, memory_md, history_md),
+        )
+
+    # ── 全局记忆（跨 session 共享，单行 singleton）──────────────────────────
+
+    async def get_global_memory(self) -> dict:
+        row = await self.fetch_one("SELECT * FROM global_memory WHERE id = 1")
+        return row or {"memory_md": "", "history_md": ""}
+
+    async def save_global_memory(self, memory_md: str, history_md: str):
+        await self.execute(
+            """INSERT INTO global_memory (id, memory_md, history_md)
+               VALUES (1, ?, ?)
+               ON CONFLICT(id) DO UPDATE SET
+               memory_md = excluded.memory_md,
+               history_md = excluded.history_md,
+               updated_at = CURRENT_TIMESTAMP""",
+            (memory_md, history_md),
         )
 
     async def get_unconsolidated_messages(self, session_id: str, limit: int = 50) -> list[dict]:

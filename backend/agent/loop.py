@@ -61,22 +61,22 @@ class AgentLoop:
         - {"type": "done", "content": "..."}              完成
         - {"type": "error", "message": "..."}             出错
         """
-        history = await self.sessions.get_history(session_id)
-        # 第一轮对话（标题仍为默认值）时自动生成标题
-        session_row = await self.sessions.get_session(session_id)
+        # 并行拉取会话数据，减少串行 DB 查询
+        history, session_row, session_meta = await asyncio.gather(
+            self.sessions.get_history(session_id),
+            self.sessions.get_session(session_id),
+            self.memory.db.get_session_metadata(session_id),
+        )
+
         should_generate_title = (session_row or {}).get("title") == "新会话"
-        messages = await self.context.build_messages(history, user_content, session_id)
-
-        # 获取会话级工具覆盖配置 + 会话专属模型
-        session_row = await self.sessions.get_session(session_id)
         session_model = (session_row or {}).get("model") or None
-        session_meta = await self.memory.db.get_session_metadata(session_id)
         session_overrides: dict[str, bool] = session_meta.get("tool_overrides", {})
-
-        tool_defs = self.tools.get_definitions(session_overrides=session_overrides)
 
         # 优先级：显式 model 参数（定时任务覆盖）> 会话专属模型 > 全局默认模型
         effective_model = model or session_model or self.model
+
+        messages = await self.context.build_messages(history, user_content, session_id)
+        tool_defs = self.tools.get_definitions(session_overrides=session_overrides)
 
         new_messages: list[dict] = []
         final_content: str | None = None
@@ -171,7 +171,7 @@ class AgentLoop:
             # 首次对话后自动生成会话标题
             if should_generate_title and final_content:
                 try:
-                    title = await self._generate_title(user_content, final_content)
+                    title = await self._generate_title(user_content, final_content, effective_model)
                     if title:
                         await self.sessions.update_title(session_id, title)
                         yield {"type": "session_title", "title": title}
@@ -186,16 +186,15 @@ class AgentLoop:
             yield {"type": "error", "message": str(e)}
         finally:
             if new_messages:
-                user_content_clean = self.context.strip_runtime_context(user_content)
-                await self.sessions.save_turn(session_id, user_content_clean, new_messages)
+                await self.sessions.save_turn(session_id, user_content, new_messages)
 
             asyncio.create_task(
                 self.memory.maybe_consolidate(
-                    session_id, messages, self.provider, self.model
+                    session_id, messages, self.provider, effective_model
                 )
             )
 
-    async def _generate_title(self, user_message: str, ai_response: str) -> str:
+    async def _generate_title(self, user_message: str, ai_response: str, model: str) -> str:
         """基于首轮对话内容生成简洁的会话标题。"""
         prompt = (
             "根据以下对话，生成一个简洁的中文标题（不超过15个字，只输出标题本身，不要引号或标点）：\n\n"
@@ -207,7 +206,7 @@ class AgentLoop:
         async for event in self.provider.chat_stream(
             messages=[{"role": "user", "content": prompt}],
             tools=None,
-            model=self.model,
+            model=model,
             temperature=0.3,
             max_tokens=30,
         ):
@@ -228,6 +227,8 @@ class AgentLoop:
         workspace = Path(config.workspace)
         workspace.mkdir(parents=True, exist_ok=True)
 
+        config_dir = Path(config.config_dir).resolve()
+
         provider = LiteLLMProvider(
             api_key=config.llm.api_key,
             api_base=config.llm.api_base,
@@ -240,7 +241,7 @@ class AgentLoop:
         skills_loader = SkillsLoader(system_skills_dir, user_skills_dir)
         # 启动时将系统 Skills 同步到 workspace/.skills_cache/，保持沙箱内访问
         skills_loader.sync_system_skills(workspace)
-        context_builder = ContextBuilder(workspace, skills_loader, memory_manager, db_manager)
+        context_builder = ContextBuilder(workspace, config_dir, skills_loader, memory_manager, db_manager)
 
         tools = ToolRegistry()
         tools.register(ReadFileTool(workspace, config.tools.restrict_to_workspace))

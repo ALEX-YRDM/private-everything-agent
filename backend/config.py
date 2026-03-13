@@ -36,6 +36,7 @@ class MCPServer(BaseSettings):
 
 class AppConfig(BaseSettings):
     workspace: str = "./workspace"
+    config_dir: str = "."          # AGENTS.md / SOUL.md / USER.md 所在目录（不在 agent 可写的 workspace 内）
     skills_dir: str = "./skills"
     llm: LLMConfig = Field(default_factory=LLMConfig)
     tools: ToolsConfig = Field(default_factory=ToolsConfig)

@@ -7,16 +7,16 @@ from .memory import MemoryManager
 class ContextBuilder:
     """负责构建每次 LLM 调用的完整消息列表。"""
 
-    _RUNTIME_TAG = "<!-- runtime_context -->"
-
     def __init__(
         self,
         workspace: Path,
+        config_dir: Path,
         skills_loader: SkillsLoader,
         memory_manager: MemoryManager,
         db_manager=None,
     ):
         self.workspace = workspace
+        self.config_dir = config_dir   # AGENTS.md / SOUL.md / USER.md 所在目录（与 workspace 隔离）
         self.skills = skills_loader
         self.memory = memory_manager
         self.db = db_manager
@@ -25,10 +25,17 @@ class ContextBuilder:
         """构建 System Prompt（静态部分 + 动态记忆）。"""
         parts = []
 
-        parts.append(self._identity())
+        # 身份定义：优先使用 AGENTS.md（允许完全自定义 persona）；
+        # 若不存在则使用内置默认身份。两种情况下都追加操作规范。
+        agents_md = self.config_dir / "AGENTS.md"
+        if agents_md.exists():
+            parts.append(agents_md.read_text(encoding="utf-8"))
+            parts.append(self._operational_rules())
+        else:
+            parts.append(self._default_identity())
 
-        for fname in ["AGENTS.md", "SOUL.md", "USER.md"]:
-            f = self.workspace / fname
+        for fname in ["SOUL.md", "USER.md"]:
+            f = self.config_dir / fname
             if f.exists():
                 parts.append(f"## {fname}\n{f.read_text(encoding='utf-8')}")
 
@@ -51,46 +58,31 @@ class ContextBuilder:
         """组合完整消息列表：system + 历史 + 当前消息。"""
         system_prompt = await self.build_system_prompt(session_id)
 
-        runtime = (
-            f"{self._RUNTIME_TAG}\n"
-            f"当前时间：{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n"
-        )
+        now = datetime.now()
+        weekdays = ["周一", "周二", "周三", "周四", "周五", "周六", "周日"]
+        runtime = f"当前时间：{now.strftime('%Y-%m-%d %H:%M:%S')}（{weekdays[now.weekday()]}）"
 
         messages = [{"role": "system", "content": system_prompt}]
         messages.extend(history)
-        messages.append({"role": "user", "content": f"{runtime}\n{user_content}"})
+        messages.append({"role": "user", "content": f"{runtime}\n\n{user_content}"})
         return messages
 
-    def strip_runtime_context(self, content: str) -> str:
-        """保存历史时剥离 runtime context 标记。"""
-        if self._RUNTIME_TAG not in content:
-            return content
-        lines = content.split("\n")
-        result = []
-        skip = False
-        for line in lines:
-            if self._RUNTIME_TAG in line:
-                skip = True
-                continue
-            if skip and line.strip() == "":
-                skip = False
-                continue
-            if not skip:
-                result.append(line)
-        return "\n".join(result).strip()
-
-    def _identity(self) -> str:
-        now = datetime.now()
-        weekdays = ["周一", "周二", "周三", "周四", "周五", "周六", "周日"]
+    def _default_identity(self) -> str:
+        """默认 persona + 操作规范（AGENTS.md 不存在时使用）。"""
         return (
             "你是**梦蝶**，一个聪明、高效、有温度的私人 AI 助理。\n\n"
-            "## 基本信息\n"
-            f"- 当前时间：{now.strftime('%Y-%m-%d %H:%M:%S')}（{weekdays[now.weekday()]}）\n"
-            f"- 工作目录：{self.workspace}\n\n"
             "## 你是谁\n"
             "你是用户的私人助理，能够胜任任何任务：编程开发、信息搜索、数据分析、"
             "文件管理、问题解答、写作翻译等。你具有主动性——拿到用户需求后自主规划并执行，"
             "而不是反复询问细节或等待逐步指令。\n\n"
+            + self._operational_rules()
+        )
+
+    def _operational_rules(self) -> str:
+        """工作目录、工具使用判断、回复风格（始终包含）。"""
+        return (
+            "## 工作目录\n"
+            "- 工作目录：`workspace/`（文件操作均相对此目录）\n\n"
             "## 工具使用判断\n"
             "**不是所有问题都需要工具**，按下列标准智能判断：\n\n"
             "✅ **直接回答**（无需工具）：\n"

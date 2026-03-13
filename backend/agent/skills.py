@@ -1,3 +1,4 @@
+import time
 import yaml
 import re
 import shutil
@@ -20,18 +21,22 @@ class SkillsLoader:
     Skills 是 SKILL.md 文件（带 YAML frontmatter），教导 Agent 如何完成特定任务。
 
     两类 Skills：
-    1. 系统 Skills（system_skills_dir）：随代码发布，启动时同步到 workspace/.skills_cache/，
+    1. 系统 Skills（system_skills_dir）：随代码发布，启动时增量同步到 workspace/.skills_cache/，
        Agent 通过 read_skill(name=xxx) 按需读取。
     2. 用户 Skills（user_skills_dir，即 workspace/skills/）：用户自建，
        在 workspace 沙箱内，Agent 同样通过 read_skill(name=xxx) 按需读取，优先级高于系统 Skills。
     """
 
+    _CACHE_TTL = 60  # 系统 Skills 列表缓存有效期（秒）
+
     def __init__(self, system_skills_dir: Path, user_skills_dir: Path | None = None):
         self.system_dir = system_skills_dir if system_skills_dir and system_skills_dir.exists() else None
         self.user_dir = user_skills_dir  # 不检查存在性，用户随时可创建
+        self._system_cache: list[SkillInfo] | None = None
+        self._system_cache_time: float = 0
 
     def sync_system_skills(self, workspace: Path) -> None:
-        """启动时将系统 Skills 同步到 workspace/.skills_cache/（只拷贝，不可写）。"""
+        """启动时将系统 Skills 增量同步到 workspace/.skills_cache/（仅更新有变更的文件）。"""
         if not self.system_dir:
             return
         cache_dir = workspace / ".skills_cache"
@@ -40,20 +45,26 @@ class SkillsLoader:
             name = skill_md.parent.name
             dst = cache_dir / name / "SKILL.md"
             dst.parent.mkdir(exist_ok=True)
-            shutil.copy2(skill_md, dst)
+            # 仅当源文件更新时才复制，避免每次启动全量 IO
+            if not dst.exists() or skill_md.stat().st_mtime > dst.stat().st_mtime:
+                shutil.copy2(skill_md, dst)
 
     def list_system_skills(self, filter_unavailable: bool = True) -> list[SkillInfo]:
-        """列出所有系统 Skills。"""
+        """列出所有系统 Skills（带 TTL 缓存，避免每轮 prompt 构建时重复读取文件系统）。"""
         if not self.system_dir:
             return []
-        skills = []
-        for skill_md in sorted(self.system_dir.glob("*/SKILL.md")):
-            name = skill_md.parent.name
-            info = self._parse_skill(name, skill_md)
-            if filter_unavailable and not self._check_requirements(info):
-                continue
-            skills.append(info)
-        return skills
+
+        now = time.monotonic()
+        if self._system_cache is None or (now - self._system_cache_time) > self._CACHE_TTL:
+            self._system_cache = [
+                self._parse_skill(p.parent.name, p)
+                for p in sorted(self.system_dir.glob("*/SKILL.md"))
+            ]
+            self._system_cache_time = now
+
+        if filter_unavailable:
+            return [s for s in self._system_cache if self._check_requirements(s)]
+        return list(self._system_cache)
 
     def list_user_skills(self) -> list[SkillInfo]:
         """列出 workspace/skills/ 中的用户自定义 Skills。"""
@@ -95,6 +106,11 @@ class SkillsLoader:
 
         lines.append("</available_skills>")
         return "\n".join(lines)
+
+    def invalidate_cache(self) -> None:
+        """手动清除系统 Skills 缓存（例如管理员更新了系统 Skills 后调用）。"""
+        self._system_cache = None
+        self._system_cache_time = 0
 
     def _parse_skill(self, name: str, path: Path) -> SkillInfo:
         content = path.read_text(encoding="utf-8")

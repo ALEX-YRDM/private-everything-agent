@@ -83,11 +83,13 @@ class SessionManager:
         user_content: str,
         new_messages: list[dict],
     ) -> None:
-        """保存本轮对话到数据库。"""
-        await self.db.execute(
+        """原子保存本轮对话到数据库（单次事务）。"""
+        statements: list[tuple[str, tuple]] = []
+
+        statements.append((
             "INSERT INTO messages (session_id, role, content) VALUES (?, 'user', ?)",
             (session_id, user_content),
-        )
+        ))
 
         for msg in new_messages:
             role = msg["role"]
@@ -96,14 +98,16 @@ class SessionManager:
             tool_call_id = msg.get("tool_call_id")
             tool_name = msg.get("name")
             reasoning = msg.get("reasoning")
-            await self.db.execute(
+            statements.append((
                 """INSERT INTO messages
                    (session_id, role, content, tool_calls, tool_call_id, tool_name, reasoning)
                    VALUES (?, ?, ?, ?, ?, ?, ?)""",
                 (session_id, role, content, tool_calls, tool_call_id, tool_name, reasoning),
-            )
+            ))
 
-        await self.db.execute(
+        statements.append((
             "UPDATE sessions SET updated_at = ? WHERE id = ?",
             (datetime.now().isoformat(), session_id),
-        )
+        ))
+
+        await self.db.execute_transaction(statements)
