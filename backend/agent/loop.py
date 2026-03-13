@@ -340,7 +340,7 @@ class AgentLoop:
         from ..providers.litellm_provider import LiteLLMProvider
         from ..tools.filesystem import ReadFileTool, WriteFileTool, EditFileTool, ListDirTool, ReadSkillTool
         from ..tools.shell import ExecTool
-        from ..tools.web import WebSearchTool, DuckDuckGoSearchTool, WebFetchTool
+        from ..tools.web import WebSearchTool, WebFetchTool
 
         workspace = Path(config.workspace)
         workspace.mkdir(parents=True, exist_ok=True)
@@ -370,7 +370,7 @@ class AgentLoop:
         tools.register(ExecTool(workspace, config.tools.shell_timeout))
         if config.tools.brave_api_key:
             tools.register(WebSearchTool(config.tools.brave_api_key))
-        tools.register(DuckDuckGoSearchTool())
+        #tools.register(DuckDuckGoSearchTool())
         tools.register(WebFetchTool())
 
         loop = cls(

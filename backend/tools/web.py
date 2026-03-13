@@ -4,12 +4,12 @@ from .base import Tool
 
 class WebSearchTool(Tool):
     name = "web_search"
-    description = "使用 Brave Search 搜索网络，返回摘要和链接列表。"
+    description = "使用 Brave Search 搜索网络，返回摘要和链接列表"
     parameters = {
         "type": "object",
         "properties": {
             "query": {"type": "string", "description": "搜索关键词"},
-            "count": {"type": "integer", "description": "结果数量，默认 5", "default": 5},
+            "count": {"type": "integer", "description": "结果数量，默认 10", "default": 10},
         },
         "required": ["query"],
     }
@@ -34,25 +34,25 @@ class WebSearchTool(Tool):
         return "\n\n".join(lines) or "未找到结果"
 
 
-class DuckDuckGoSearchTool(Tool):
-    name = "web_search_ddg"
-    description = "使用 DuckDuckGo 搜索网络，无需 API Key，返回摘要和链接列表。"
-    parameters = {
-        "type": "object",
-        "properties": {
-            "query": {"type": "string", "description": "搜索关键词"},
-            "count": {"type": "integer", "description": "结果数量，默认 5", "default": 5},
-        },
-        "required": ["query"],
-    }
+# class DuckDuckGoSearchTool(Tool):
+#     name = "web_search_ddg"
+#     description = "使用 DuckDuckGo 搜索网络，无需 API Key，返回摘要和链接列表。"
+#     parameters = {
+#         "type": "object",
+#         "properties": {
+#             "query": {"type": "string", "description": "搜索关键词"},
+#             "count": {"type": "integer", "description": "结果数量，默认 5", "default": 5},
+#         },
+#         "required": ["query"],
+#     }
 
-    async def execute(self, query: str, count: int = 5) -> str:
-        from duckduckgo_search import DDGS
-        results = DDGS().text(query, max_results=count)
-        lines = []
-        for r in results:
-            lines.append(f"## {r['title']}\n{r['href']}\n{r.get('body', '')}")
-        return "\n\n".join(lines) or "未找到结果"
+#     async def execute(self, query: str, count: int = 5) -> str:
+#         from duckduckgo_search import DDGS
+#         results = DDGS().text(query, max_results=count)
+#         lines = []
+#         for r in results:
+#             lines.append(f"## {r['title']}\n{r['href']}\n{r.get('body', '')}")
+#         return "\n\n".join(lines) or "未找到结果"
 
 
 class WebFetchTool(Tool):
