@@ -25,7 +25,7 @@ echo ""
 
 # 在后台启动后端
 source .venv/bin/activate
-uvicorn backend.main:app --reload --port 8000 &
+uvicorn backend.main:app --reload --reload-dir backend --port 8000 &
 BACKEND_PID=$!
 
 # 等待后端启动
