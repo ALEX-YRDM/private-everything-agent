@@ -80,6 +80,7 @@ class AgentLoop:
 
         new_messages: list[dict] = []
         final_content: str | None = None
+        accumulated_content = ""  # 跟踪当前轮次的流式内容，供 finally 块在取消时使用
 
         try:
             for iteration in range(self.max_iterations):
@@ -180,6 +181,9 @@ class AgentLoop:
 
         except asyncio.CancelledError:
             logger.info(f"会话 {session_id} 的流式响应被取消")
+            # 将未完成的流式内容追加到 new_messages，确保停止时不丢失已输出内容
+            if accumulated_content and (not new_messages or new_messages[-1].get("role") != "assistant"):
+                new_messages.append({"role": "assistant", "content": accumulated_content})
             raise
         except Exception as e:
             logger.exception(f"Agent 处理出错: {e}")
@@ -187,6 +191,9 @@ class AgentLoop:
         finally:
             if new_messages:
                 await self.sessions.save_turn(session_id, user_content, new_messages)
+            elif user_content:
+                # 即使没有任何助手回复（极端情况），也保存用户消息以防对话记录丢失
+                await self.sessions.save_turn(session_id, user_content, [])
 
             asyncio.create_task(
                 self.memory.maybe_consolidate(
