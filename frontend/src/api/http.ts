@@ -100,6 +100,19 @@ export interface MCPServer {
   updated_at: string
 }
 
+export interface SystemSkill {
+  name: string
+  description: string
+  available: boolean
+  requires_bins: string[]
+  requires_env: string[]
+}
+
+export interface UserSkill {
+  name: string
+  description: string
+}
+
 export interface ScheduledTask {
   id: number
   name: string
@@ -238,6 +251,10 @@ export const api = {
       request<MCPServer & { reconnect_ok: boolean }>(`/api/mcp-servers/${id}/reconnect`, { method: 'POST' }),
     toggle: (id: number) =>
       request<MCPServer>(`/api/mcp-servers/${id}/toggle`, { method: 'POST' }),
+  },
+  skills: {
+    listSystem: () => request<{ skills: SystemSkill[] }>('/api/skills/system'),
+    listUser: () => request<{ skills: UserSkill[] }>('/api/skills/user'),
   },
   tasks: {
     list: () => request<{ tasks: ScheduledTask[] }>('/api/tasks'),
