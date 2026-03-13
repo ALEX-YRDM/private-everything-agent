@@ -1,7 +1,17 @@
 import { ref, computed } from 'vue'
 import { defineStore } from 'pinia'
 import { api, type Session, type Message } from '../api/http'
-import { AgentWebSocket, type StreamEvent } from '../api/websocket'
+import { AgentWebSocket, type StreamEvent, type SubAgentInnerEvent } from '../api/websocket'
+
+export interface SubAgentState {
+  id: string
+  session_id: string
+  task: string
+  status: 'running' | 'completed' | 'failed'
+  events: SubAgentInnerEvent[]
+  result?: string
+  error?: string
+}
 
 export interface DisplayMessage {
   id: string
@@ -10,6 +20,7 @@ export interface DisplayMessage {
   reasoning?: string
   toolCalls?: ToolCallDisplay[]
   toolResults?: Record<string, string>
+  subAgents?: SubAgentState[]
   isStreaming?: boolean
   timestamp: number
 }
@@ -25,6 +36,11 @@ interface SessionState {
   isStreaming: boolean
   streamingMessage: DisplayMessage | null
   loaded: boolean
+  // 当前消息轮次中活跃的 SubAgent（streaming 期间）
+  activeSubAgents: Map<string, SubAgentState>
+  // 已展开的 SubAgent session 列表（用于 SessionList）
+  subagentSessions: Session[]
+  subagentSessionsLoaded: boolean
 }
 
 const TASK_TOOLS = new Set(['create_task', 'delete_task', 'update_task'])
@@ -62,6 +78,9 @@ export const useChatStore = defineStore('chat', () => {
         isStreaming: false,
         streamingMessage: null,
         loaded: false,
+        activeSubAgents: new Map(),
+        subagentSessions: [],
+        subagentSessionsLoaded: false,
       }
     }
     return sessionStates.value[sessionId]
@@ -174,7 +193,9 @@ export const useChatStore = defineStore('chat', () => {
     const state = getSessionState(sessionId)
     if (
       state.streamingMessage &&
-      (state.streamingMessage.content || (state.streamingMessage.toolCalls?.length ?? 0) > 0)
+      (state.streamingMessage.content ||
+        (state.streamingMessage.toolCalls?.length ?? 0) > 0 ||
+        (state.streamingMessage.subAgents?.length ?? 0) > 0)
     ) {
       state.streamingMessage.isStreaming = false
       state.messages.push({ ...state.streamingMessage })
@@ -182,6 +203,7 @@ export const useChatStore = defineStore('chat', () => {
     } else {
       state.streamingMessage = null
     }
+    state.activeSubAgents.clear()
     state.isStreaming = false
   }
 
@@ -260,12 +282,51 @@ export const useChatStore = defineStore('chat', () => {
       if (TASK_TOOLS.has(event.name)) {
         tasksChangedAt.value++
       }
+    } else if (event.type === 'subagent_start') {
+      const sa: SubAgentState = {
+        id: event.subagent_id,
+        session_id: event.session_id,
+        task: event.task,
+        status: 'running',
+        events: [],
+      }
+      state.activeSubAgents.set(event.subagent_id, sa)
+      // 确保 streamingMessage 存在并附加 SubAgent
+      if (!state.streamingMessage) {
+        state.streamingMessage = {
+          id: `streaming-${Date.now()}`,
+          role: 'assistant',
+          content: '',
+          toolCalls: [],
+          toolResults: {},
+          subAgents: [],
+          isStreaming: true,
+          timestamp: Date.now(),
+        }
+      }
+      if (!state.streamingMessage.subAgents) {
+        state.streamingMessage.subAgents = []
+      }
+      state.streamingMessage.subAgents.push(sa)
+    } else if (event.type === 'subagent_event') {
+      const sa = state.activeSubAgents.get(event.subagent_id)
+      if (sa) {
+        sa.events.push(event.event)
+      }
+    } else if (event.type === 'subagent_done') {
+      const sa = state.activeSubAgents.get(event.subagent_id)
+      if (sa) {
+        sa.status = event.error ? 'failed' : 'completed'
+        sa.result = event.result
+        sa.error = event.error
+      }
     } else if (event.type === 'done') {
       if (state.streamingMessage) {
         state.streamingMessage.isStreaming = false
         state.messages.push({ ...state.streamingMessage })
         state.streamingMessage = null
       }
+      state.activeSubAgents.clear()
       state.isStreaming = false
       loadSessions()
     } else if (event.type === 'error') {
@@ -332,6 +393,22 @@ export const useChatStore = defineStore('chat', () => {
     if (s) s.title = title
   }
 
+  async function loadSubagentSessions(sessionId: string) {
+    const state = getSessionState(sessionId)
+    if (state.subagentSessionsLoaded) return
+    try {
+      const data = await api.sessions.getSubagentSessions(sessionId)
+      state.subagentSessions = data.sessions
+      state.subagentSessionsLoaded = true
+    } catch (e) {
+      console.error('加载子 Agent 会话失败', e)
+    }
+  }
+
+  function getSubagentSessions(sessionId: string): Session[] {
+    return sessionStates.value[sessionId]?.subagentSessions ?? []
+  }
+
   async function init() {
     await loadSessions()
     const first = sessions.value[0]
@@ -357,5 +434,8 @@ export const useChatStore = defineStore('chat', () => {
     sendMessage,
     stopStreaming,
     renameSession,
+    loadSubagentSessions,
+    getSubagentSessions,
+    getSessionState,
   }
 })

@@ -6,6 +6,7 @@ import {
   useMessage,
 } from 'naive-ui'
 import MessageBubble from './MessageBubble.vue'
+import SubAgentBlock from './SubAgentBlock.vue'
 import { useChatStore } from '../stores/chat'
 import { useSettingsStore } from '../stores/settings'
 import { api, type PromptTemplate, type ToolState } from '../api/http'
@@ -233,7 +234,17 @@ loadTemplates()
           description="发送消息开始对话"
           class="empty-chat"
         />
-        <MessageBubble v-for="msg in allMessages" :key="msg.id" :message="msg" />
+        <template v-for="msg in allMessages" :key="msg.id">
+          <MessageBubble :message="msg" />
+          <!-- SubAgent 块：渲染在对应的 assistant 消息下方 -->
+          <template v-if="msg.role === 'assistant' && msg.subAgents?.length">
+            <SubAgentBlock
+              v-for="sa in msg.subAgents"
+              :key="sa.id"
+              :subAgent="sa"
+            />
+          </template>
+        </template>
         <div v-if="chat.isStreaming && !chat.streamingMessage" class="typing-indicator">
           <NSpin size="small" />
           <span>思考中…</span>

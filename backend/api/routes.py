@@ -168,6 +168,14 @@ async def get_messages(request: Request, session_id: str):
     return {"messages": messages}
 
 
+@router.get("/sessions/{session_id}/subagent-sessions")
+async def get_subagent_sessions(request: Request, session_id: str):
+    """获取某主会话下的所有 SubAgent 子会话。"""
+    agent = request.app.state.agent
+    sessions = await agent.sessions.get_subagent_sessions(session_id)
+    return {"sessions": sessions}
+
+
 @router.put("/sessions/{session_id}/title")
 async def update_title(request: Request, session_id: str, body: UpdateTitleRequest):
     """修改会话标题。"""

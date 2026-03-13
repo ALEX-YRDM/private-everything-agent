@@ -148,6 +148,8 @@ export const api = {
         method: 'PUT',
         body: JSON.stringify({ model }),
       }),
+    getSubagentSessions: (id: string) =>
+      request<{ sessions: Session[] }>(`/api/sessions/${id}/subagent-sessions`),
   },
   models: {
     list: () => request<{ models: ModelInfo[] }>('/api/models'),

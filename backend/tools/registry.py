@@ -53,18 +53,34 @@ class ToolRegistry:
             return bool(session_overrides[name])
         return name not in self._globally_disabled
 
-    def get_definitions(self, session_overrides: dict[str, bool] | None = None) -> list[dict]:
+    def get_definitions(
+        self,
+        session_overrides: dict[str, bool] | None = None,
+        allowed_names: set[str] | None = None,
+        exclude_names: set[str] | None = None,
+    ) -> list[dict]:
         """
         返回当前会话可用的工具 schema 列表。
 
         :param session_overrides: 会话级 override {"exec": False, "web_search": True}
                                   True=强制启用（即使全局禁用），False=强制禁用
+        :param allowed_names:     工具白名单（SubAgent 动态指定可用工具集）；None = 不限制
+        :param exclude_names:     强制排除的工具名（如 SubAgent 中排除 spawn_subagents）
         """
-        return [
-            t.to_schema()
-            for name, t in self._tools.items()
-            if self._is_effective_enabled(name, session_overrides)
-        ]
+        result = []
+        for name, t in self._tools.items():
+            if not self._is_effective_enabled(name, session_overrides):
+                continue
+            if allowed_names is not None and name not in allowed_names:
+                continue
+            if exclude_names and name in exclude_names:
+                continue
+            result.append(t.to_schema())
+        return result
+
+    def get_tool(self, name: str):
+        """按名称获取工具实例（不存在返回 None）。"""
+        return self._tools.get(name)
 
     def get_tool_states(self, session_overrides: dict[str, bool] | None = None) -> list[dict]:
         """返回所有工具的可视化状态（用于前端显示）。"""
@@ -86,6 +102,35 @@ class ToolRegistry:
         return result
 
     # ── 执行 ────────────────────────────────────────────────────────────────
+
+    async def execute_streaming(
+        self,
+        name: str,
+        params: dict,
+        stream_callback,
+        session_overrides: dict[str, bool] | None = None,
+    ) -> str:
+        """执行 StreamingTool，注入 stream_callback；普通工具退化为 execute。"""
+        from .base import StreamingTool as _ST
+        tool = self._tools.get(name)
+        if not tool:
+            return f"[错误] 工具 '{name}' 不存在"
+        if not self._is_effective_enabled(name, session_overrides):
+            return f"[已禁用] 工具 '{name}' 在当前会话中已被禁用"
+        errors = tool.validate_params(params)
+        if errors:
+            return f"[参数错误] {'; '.join(errors)}"
+        try:
+            if isinstance(tool, _ST):
+                result = await tool.execute_streaming(stream_callback, **params)
+            else:
+                result = await tool.execute(**params)
+            if len(result) > 10000:
+                result = result[:10000] + f"\n...[结果已截断，共 {len(result)} 字符]"
+            return result
+        except Exception as e:
+            import traceback
+            return f"[执行错误] {type(e).__name__}: {e}\n{traceback.format_exc()[-500:]}"
 
     async def execute(self, name: str, params: dict,
                       session_overrides: dict[str, bool] | None = None) -> str:

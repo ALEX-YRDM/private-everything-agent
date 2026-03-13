@@ -24,8 +24,38 @@ class SessionManager:
         return await self.db.fetch_one("SELECT * FROM sessions WHERE id = ?", (session_id,))
 
     async def list_sessions(self) -> list[dict]:
+        """列出主会话（不含 SubAgent 子会话）。"""
         return await self.db.fetch_all(
-            "SELECT * FROM sessions ORDER BY updated_at DESC"
+            """SELECT * FROM sessions
+               WHERE COALESCE(json_extract(metadata, '$.is_subagent'), 0) != 1
+               ORDER BY updated_at DESC"""
+        )
+
+    async def create_subagent_session(
+        self,
+        parent_session_id: str,
+        task_id: str,
+        task: str,
+    ) -> str:
+        """为 SubAgent 创建独立 Session，metadata 标记父会话关系。"""
+        import json as _json
+        session = await self.create_session(title=f"[子任务] {task[:30]}")
+        metadata = {
+            "is_subagent": True,
+            "parent_session_id": parent_session_id,
+            "subagent_task_id": task_id,
+            "subagent_task": task,
+        }
+        await self.db.set_session_metadata(session["id"], metadata)
+        return session["id"]
+
+    async def get_subagent_sessions(self, parent_session_id: str) -> list[dict]:
+        """获取某主会话下的所有 SubAgent 子会话。"""
+        return await self.db.fetch_all(
+            """SELECT * FROM sessions
+               WHERE json_extract(metadata, '$.parent_session_id') = ?
+               ORDER BY created_at ASC""",
+            (parent_session_id,),
         )
 
     async def delete_session(self, session_id: str) -> bool:

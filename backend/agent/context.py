@@ -78,6 +78,29 @@ class ContextBuilder:
             + self._operational_rules()
         )
 
+    async def build_subagent_messages(self, task: str) -> list[dict]:
+        """
+        为 SubAgent 构建精简的消息列表。
+        SubAgent 专注于单一子任务，不需要完整的身份/记忆/Skills 上下文。
+        """
+        now = datetime.now()
+        weekdays = ["周一", "周二", "周三", "周四", "周五", "周六", "周日"]
+        runtime = f"当前时间：{now.strftime('%Y-%m-%d %H:%M:%S')}（{weekdays[now.weekday()]}）"
+
+        system = (
+            "你是一个专注的子代理（SubAgent），负责高效完成指定的子任务。\n\n"
+            "## 工作原则\n"
+            "- 专注于完成分配的单一任务，不做额外的事情\n"
+            "- 直接执行，不需要询问确认或解释计划\n"
+            "- 完成后输出清晰、结构化的结论，供主代理使用\n"
+            "- 遇到问题时尝试替代方案，不要无限重试同一操作\n\n"
+            + self._operational_rules()
+        )
+        return [
+            {"role": "system", "content": system},
+            {"role": "user", "content": f"{runtime}\n\n{task}"},
+        ]
+
     def _operational_rules(self) -> str:
         """工作目录、工具使用判断、回复风格（始终包含）。"""
         return (
@@ -106,6 +129,12 @@ class ContextBuilder:
             "- 搜索信息 → 先 `web_search` 获取相关链接，再按需 `web_fetch` 读取详情\n"
             "- 无依赖关系的多个工具可在同一轮并行调用\n"
             "- 工具调用失败 → 分析原因，尝试替代方案，**不要反复重试同一操作**\n\n"
+            "## SubAgent 调度规范\n"
+            "当任务适合分解为多个**独立**子任务时，使用 `spawn_subagents` 并行派发：\n"
+            "- 子任务之间**无依赖关系**（可同时执行）\n"
+            "- 每个子任务需要不同的工具组合，或需要独立的搜索/分析\n"
+            "- 子任务描述必须**自包含**（不引用对话上下文）\n"
+            "- 串行任务、简单任务、或已有工具可直接完成的任务**不要**用 SubAgent\n\n"
             "## 回复风格\n"
             "- **语言**：中文为主，代码、命令、专有名词保留原文\n"
             "- **简洁**：不废话，不重复已知信息，不过度解释显而易见的事情\n"

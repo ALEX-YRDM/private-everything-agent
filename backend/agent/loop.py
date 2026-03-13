@@ -21,6 +21,7 @@ class AgentLoop:
     - 自动记忆整合
     - MCP 工具
     - 最大迭代次数限制
+    - SubAgent 模式（depth > 0）：并行派发、隔离执行、事件透传
     """
 
     TOOL_RESULT_MAX_CHARS = 8000
@@ -37,6 +38,8 @@ class AgentLoop:
         max_iterations: int = 40,
         temperature: float = 0.1,
         max_tokens: int = 4096,
+        depth: int = 0,
+        allowed_tools: list[str] | None = None,
     ):
         self.provider = provider
         self.workspace = workspace
@@ -48,39 +51,83 @@ class AgentLoop:
         self.max_iterations = max_iterations
         self.temperature = temperature
         self.max_tokens = max_tokens
+        # SubAgent 相关
+        self.depth = depth                    # 0=主Agent，1+=SubAgent
+        self.allowed_tools = allowed_tools    # 工具白名单（SubAgent 动态指定）
+        self._current_session_id: str | None = None  # 当前处理的 session_id（供 SpawnSubAgentsTool 读取）
+
+    def create_subagent_loop(self, allowed_tools: list[str] | None = None) -> "AgentLoop":
+        """
+        创建一个 SubAgent 用的 AgentLoop 实例，共享所有组件但：
+        - depth + 1（防止无限递归）
+        - max_iterations 上限为 20
+        - allowed_tools 限定工具白名单
+        """
+        return AgentLoop(
+            provider=self.provider,
+            workspace=self.workspace,
+            session_manager=self.sessions,
+            memory_manager=self.memory,
+            context_builder=self.context,
+            tools=self.tools,
+            model=self.model,
+            max_iterations=min(20, self.max_iterations),
+            temperature=self.temperature,
+            max_tokens=self.max_tokens,
+            depth=self.depth + 1,
+            allowed_tools=allowed_tools,
+        )
 
     async def process_stream(self, session_id: str, user_content: str, model: str | None = None):
         """
         处理用户消息，以异步生成器方式 yield 事件字典。
 
-        事件类型：
+        事件类型（主 Agent）：
         - {"type": "thinking", "content": "..."}          LLM 推理过程
         - {"type": "tool_call", "name": "...", "args": {...}}   工具调用
         - {"type": "tool_result", "name": "...", "content": "..."} 工具结果
+        - {"type": "subagent_start", "subagent_id": "...", "session_id": "...", "task": "..."}
+        - {"type": "subagent_event", "subagent_id": "...", "event": {...}}
+        - {"type": "subagent_done", "subagent_id": "...", "result": "..."}
         - {"type": "content_delta", "content": "..."}     流式 token
         - {"type": "done", "content": "..."}              完成
         - {"type": "error", "message": "..."}             出错
         """
-        # 并行拉取会话数据，减少串行 DB 查询
-        history, session_row, session_meta = await asyncio.gather(
-            self.sessions.get_history(session_id),
-            self.sessions.get_session(session_id),
-            self.memory.db.get_session_metadata(session_id),
+        self._current_session_id = session_id
+
+        is_subagent = self.depth > 0
+
+        if is_subagent:
+            # SubAgent：简洁上下文，无历史，无记忆
+            messages = await self.context.build_subagent_messages(user_content)
+            session_overrides: dict[str, bool] = {}
+            effective_model = model or self.model
+            should_generate_title = False
+        else:
+            # 主 Agent：完整上下文
+            history, session_row, session_meta = await asyncio.gather(
+                self.sessions.get_history(session_id),
+                self.sessions.get_session(session_id),
+                self.memory.db.get_session_metadata(session_id),
+            )
+            should_generate_title = (session_row or {}).get("title") == "新会话"
+            session_model = (session_row or {}).get("model") or None
+            session_overrides = session_meta.get("tool_overrides", {})
+            effective_model = model or session_model or self.model
+            messages = await self.context.build_messages(history, user_content, session_id)
+
+        # 构建工具定义：SubAgent 排除 spawn_subagents 且应用白名单
+        exclude = {"spawn_subagents"} if is_subagent else None
+        allowed = set(self.allowed_tools) if self.allowed_tools else None
+        tool_defs = self.tools.get_definitions(
+            session_overrides=session_overrides,
+            allowed_names=allowed,
+            exclude_names=exclude,
         )
-
-        should_generate_title = (session_row or {}).get("title") == "新会话"
-        session_model = (session_row or {}).get("model") or None
-        session_overrides: dict[str, bool] = session_meta.get("tool_overrides", {})
-
-        # 优先级：显式 model 参数（定时任务覆盖）> 会话专属模型 > 全局默认模型
-        effective_model = model or session_model or self.model
-
-        messages = await self.context.build_messages(history, user_content, session_id)
-        tool_defs = self.tools.get_definitions(session_overrides=session_overrides)
 
         new_messages: list[dict] = []
         final_content: str | None = None
-        accumulated_content = ""  # 跟踪当前轮次的流式内容，供 finally 块在取消时使用
+        accumulated_content = ""
 
         try:
             for iteration in range(self.max_iterations):
@@ -135,16 +182,56 @@ class AgentLoop:
                             for tc in tc_list
                         ],
                     }
-                    # DeepSeek reasoning 模型要求 tool_calls 消息里必须携带 reasoning_content
                     if tc_reasoning:
                         assistant_msg["reasoning_content"] = tc_reasoning
                     messages.append(assistant_msg)
                     new_messages.append(assistant_msg)
 
                     for tc in tc_list:
-                        result = await self.tools.execute(
-                            tc["name"], tc["arguments"], session_overrides=session_overrides
-                        )
+                        tool_obj = self.tools.get_tool(tc["name"])
+
+                        # 检查是否为 StreamingTool（如 spawn_subagents）
+                        from ..tools.base import StreamingTool as _ST
+                        if isinstance(tool_obj, _ST):
+                            # 用 asyncio.Queue 桥接流式事件到主生成器
+                            event_queue: asyncio.Queue = asyncio.Queue()
+
+                            def make_sync_callback(q: asyncio.Queue):
+                                def _cb(evt: dict):
+                                    q.put_nowait(evt)
+                                return _cb
+
+                            sync_cb = make_sync_callback(event_queue)
+
+                            async def run_streaming(tool=tool_obj, params=tc["arguments"], cb=sync_cb, q=event_queue):
+                                try:
+                                    errors = tool.validate_params(params)
+                                    if errors:
+                                        result = f"[参数错误] {'; '.join(errors)}"
+                                    else:
+                                        result = await tool.execute_streaming(cb, **params)
+                                except Exception as e:
+                                    import traceback
+                                    result = f"[执行错误] {type(e).__name__}: {e}\n{traceback.format_exc()[-500:]}"
+                                q.put_nowait(None)  # 哨兵：表示执行完毕
+                                return result
+
+                            streaming_task = asyncio.create_task(run_streaming())
+
+                            # 从队列消费事件并 yield 给主流
+                            while True:
+                                evt = await event_queue.get()
+                                if evt is None:
+                                    break
+                                yield evt  # 透传 subagent_start / subagent_event / subagent_done
+
+                            result = await streaming_task
+                        else:
+                            # 普通工具：直接执行
+                            result = await self.tools.execute(
+                                tc["name"], tc["arguments"], session_overrides=session_overrides
+                            )
+
                         if len(result) > self.TOOL_RESULT_MAX_CHARS:
                             result = result[: self.TOOL_RESULT_MAX_CHARS] + "...[已截断]"
 
@@ -169,7 +256,7 @@ class AgentLoop:
 
             yield {"type": "done", "content": final_content}
 
-            # 首次对话后自动生成会话标题
+            # 主 Agent 才生成标题
             if should_generate_title and final_content:
                 try:
                     title = await self._generate_title(user_content, final_content, effective_model)
@@ -181,7 +268,6 @@ class AgentLoop:
 
         except asyncio.CancelledError:
             logger.info(f"会话 {session_id} 的流式响应被取消")
-            # 将未完成的流式内容追加到 new_messages，确保停止时不丢失已输出内容
             if accumulated_content and (not new_messages or new_messages[-1].get("role") != "assistant"):
                 new_messages.append({"role": "assistant", "content": accumulated_content})
             raise
@@ -192,14 +278,15 @@ class AgentLoop:
             if new_messages:
                 await self.sessions.save_turn(session_id, user_content, new_messages)
             elif user_content:
-                # 即使没有任何助手回复（极端情况），也保存用户消息以防对话记录丢失
                 await self.sessions.save_turn(session_id, user_content, [])
 
-            asyncio.create_task(
-                self.memory.maybe_consolidate(
-                    session_id, messages, self.provider, effective_model
+            # SubAgent 不做全局记忆整合（throwaway session）
+            if not is_subagent:
+                asyncio.create_task(
+                    self.memory.maybe_consolidate(
+                        session_id, messages, self.provider, effective_model
+                    )
                 )
-            )
 
     async def _generate_title(self, user_message: str, ai_response: str, model: str) -> str:
         """基于首轮对话内容生成简洁的会话标题。"""
@@ -262,7 +349,7 @@ class AgentLoop:
         tools.register(DuckDuckGoSearchTool())
         tools.register(WebFetchTool())
 
-        return cls(
+        loop = cls(
             provider=provider,
             workspace=workspace,
             session_manager=session_manager,
@@ -274,6 +361,7 @@ class AgentLoop:
             temperature=config.llm.temperature,
             max_tokens=config.llm.max_tokens,
         )
+        return loop
 
 
 # 避免循环导入

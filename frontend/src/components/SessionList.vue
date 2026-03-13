@@ -7,6 +7,8 @@ const chat = useChatStore()
 const editingId = ref<string | null>(null)
 const editingTitle = ref('')
 const searchQuery = ref('')
+// 记录哪些 session 已展开子任务列表
+const expandedSubSessions = ref<Set<string>>(new Set())
 
 function startRename(id: string, currentTitle: string) {
   editingId.value = id
@@ -34,6 +36,15 @@ const filteredSessions = computed(() => {
   if (!q) return sorted
   return sorted.filter((s) => s.title.toLowerCase().includes(q))
 })
+
+async function toggleSubSessions(sessionId: string) {
+  if (expandedSubSessions.value.has(sessionId)) {
+    expandedSubSessions.value.delete(sessionId)
+  } else {
+    expandedSubSessions.value.add(sessionId)
+    await chat.loadSubagentSessions(sessionId)
+  }
+}
 </script>
 
 <template>
@@ -60,44 +71,77 @@ const filteredSessions = computed(() => {
     </div>
 
     <NScrollbar class="sessions-scroll">
-      <div
-        v-for="session in filteredSessions"
-        :key="session.id"
-        class="session-item"
-        :class="{ active: chat.currentSessionId === session.id }"
-        @click="chat.switchSession(session.id)"
-      >
-        <template v-if="editingId === session.id">
-          <NInput
-            v-model:value="editingTitle"
-            size="small"
-            @blur="confirmRename(session.id)"
-            @keydown.enter="confirmRename(session.id)"
-            @keydown.esc="cancelRename"
-            @click.stop
-            autofocus
-          />
-        </template>
-        <template v-else>
-          <span class="session-title" @dblclick.stop="startRename(session.id, session.title)">
-            {{ session.title }}
-          </span>
-          <div class="session-actions" @click.stop>
-            <NTooltip>
-              <template #trigger>
-                <button class="action-btn" @click="startRename(session.id, session.title)">✏️</button>
-              </template>
-              重命名
-            </NTooltip>
-            <NPopconfirm @positive-click="chat.deleteSession(session.id)">
-              <template #trigger>
-                <button class="action-btn delete-btn">🗑️</button>
-              </template>
-              确定删除这个会话吗？
-            </NPopconfirm>
+      <template v-for="session in filteredSessions" :key="session.id">
+        <!-- 主 Session 行 -->
+        <div
+          class="session-item"
+          :class="{ active: chat.currentSessionId === session.id }"
+          @click="chat.switchSession(session.id)"
+        >
+          <template v-if="editingId === session.id">
+            <NInput
+              v-model:value="editingTitle"
+              size="small"
+              @blur="confirmRename(session.id)"
+              @keydown.enter="confirmRename(session.id)"
+              @keydown.esc="cancelRename"
+              @click.stop
+              autofocus
+            />
+          </template>
+          <template v-else>
+            <span class="session-title" @dblclick.stop="startRename(session.id, session.title)">
+              {{ session.title }}
+            </span>
+            <div class="session-actions" @click.stop>
+              <!-- 子任务展开按钮 -->
+              <NTooltip>
+                <template #trigger>
+                  <button
+                    class="action-btn sub-btn"
+                    :class="{ active: expandedSubSessions.has(session.id) }"
+                    @click="toggleSubSessions(session.id)"
+                  >⚙</button>
+                </template>
+                {{ expandedSubSessions.has(session.id) ? '收起子任务会话' : '展开子任务会话' }}
+              </NTooltip>
+              <NTooltip>
+                <template #trigger>
+                  <button class="action-btn" @click="startRename(session.id, session.title)">✏️</button>
+                </template>
+                重命名
+              </NTooltip>
+              <NPopconfirm @positive-click="chat.deleteSession(session.id)">
+                <template #trigger>
+                  <button class="action-btn delete-btn">🗑️</button>
+                </template>
+                确定删除这个会话吗？
+              </NPopconfirm>
+            </div>
+          </template>
+        </div>
+
+        <!-- 子 Session 列表（方案 B：折叠展示在主 Session 下方） -->
+        <template v-if="expandedSubSessions.has(session.id)">
+          <div
+            v-for="sub in chat.getSubagentSessions(session.id)"
+            :key="sub.id"
+            class="session-item sub-session-item"
+            :class="{ active: chat.currentSessionId === sub.id }"
+            @click="chat.switchSession(sub.id)"
+          >
+            <span class="sub-session-indent">└</span>
+            <span class="sub-session-icon">⚙</span>
+            <span class="session-title sub-session-title">{{ sub.title }}</span>
+          </div>
+          <div
+            v-if="chat.getSubagentSessions(session.id).length === 0"
+            class="sub-session-empty"
+          >
+            暂无子任务会话
           </div>
         </template>
-      </div>
+      </template>
 
       <div v-if="filteredSessions.length === 0" class="empty-state">
         <template v-if="searchQuery">
@@ -165,6 +209,49 @@ const filteredSessions = computed(() => {
   color: #1677ff;
 }
 
+/* 子 Session 样式 */
+.sub-session-item {
+  padding: 6px 8px 6px 10px;
+  min-height: 32px;
+  margin: 1px 6px;
+  border-radius: 6px;
+  background: transparent;
+}
+
+.sub-session-item:hover {
+  background: #f3f4f6;
+}
+
+.sub-session-item.active {
+  background: #e6f0ff;
+  color: #1677ff;
+}
+
+.sub-session-indent {
+  color: #ccc;
+  font-size: 12px;
+  flex-shrink: 0;
+  margin-right: 4px;
+}
+
+.sub-session-icon {
+  font-size: 11px;
+  color: #999;
+  flex-shrink: 0;
+  margin-right: 4px;
+}
+
+.sub-session-title {
+  font-size: 12px;
+  color: #666;
+}
+
+.sub-session-empty {
+  padding: 4px 14px 4px 28px;
+  font-size: 11px;
+  color: #bbb;
+}
+
 .session-title {
   flex: 1;
   font-size: 13px;
@@ -200,6 +287,18 @@ const filteredSessions = computed(() => {
 
 .delete-btn:hover {
   background: #fee;
+}
+
+/* 子任务展开按钮 */
+.sub-btn {
+  color: #666;
+  font-size: 11px;
+}
+
+.sub-btn.active {
+  color: #1677ff;
+  background: #e6f0ff;
+  opacity: 1;
 }
 
 .empty-state {

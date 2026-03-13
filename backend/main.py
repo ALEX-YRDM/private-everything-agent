@@ -297,6 +297,10 @@ async def lifespan(app: FastAPI):
     from .tools.task_tools import register_task_tools
     register_task_tools(agent.tools, db, scheduler)
 
+    # 注册 SubAgent 工具（需在 agent 完全就绪后注册，以便持有引用）
+    from .tools.subagent import SpawnSubAgentsTool
+    agent.tools.register(SpawnSubAgentsTool(agent))
+
     # 从 DB 加载全局禁用工具集合
     import json as _json
     disabled_raw = await db.get_setting("disabled_tools", "[]")
