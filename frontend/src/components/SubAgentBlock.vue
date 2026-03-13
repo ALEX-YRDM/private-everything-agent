@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref, computed } from 'vue'
-import { NTag } from 'naive-ui'
+import { NTag, NCollapse, NCollapseItem } from 'naive-ui'
 import type { SubAgentState } from '../stores/chat'
 import type { SubAgentInnerEvent } from '../api/websocket'
 
@@ -45,16 +45,16 @@ const streamingArgsMap = computed(() => {
   return acc
 })
 
-// const contentEvents = computed(() =>
-//   props.subAgent.events.filter(
-//     (e): e is Extract<SubAgentInnerEvent, { type: 'content_delta' }> =>
-//       e.type === 'content_delta'
-//   )
-// )
+const contentEvents = computed(() =>
+  props.subAgent.events.filter(
+    (e): e is Extract<SubAgentInnerEvent, { type: 'content_delta' }> =>
+      e.type === 'content_delta'
+  )
+)
 
-// const accumulatedContent = computed(() =>
-//   contentEvents.value.map((e) => e.content).join('')
-// )
+const accumulatedContent = computed(() =>
+  contentEvents.value.map((e) => e.content).join('')
+)
 </script>
 
 <template>
@@ -72,22 +72,29 @@ const streamingArgsMap = computed(() => {
       <span class="expand-icon">{{ expanded ? '▲' : '▼' }}</span>
     </div>
 
-    <!-- 展开内容 -->
-    <div v-if="expanded" class="subagent-body">
-      <!-- 工具调用列表 -->
-      <div v-if="toolCallEvents.length > 0" class="tool-calls-section">
-        <div v-for="tc in toolCallEvents" :key="tc.id" class="inner-tool-call">
-          <span class="tool-call-icon">⚙</span>
-          <span class="tool-call-name">{{ tc.name }}</span>
-          <!-- 流式生成参数时显示滚动文本，生成完毕后显示格式化截断 JSON -->
-          <span v-if="streamingArgsMap.has(tc.id)" class="tool-call-args streaming">
-            {{ streamingArgsMap.get(tc.id)?.slice(-60) }}
-          </span>
-          <span v-else-if="Object.keys(tc.args).length > 0" class="tool-call-args">
-            {{ JSON.stringify(tc.args).slice(0, 80) }}{{ JSON.stringify(tc.args).length > 80 ? '…' : '' }}
-          </span>
+    <!-- 展开内容（使用 NCollapse 组件） -->
+    <NCollapse v-if="expanded" class="subagent-body">
+      <NCollapseItem v-if="toolCallEvents.length > 0" title="工具调用" name="tools">
+        <!-- 工具调用列表 -->
+        <div class="tool-calls-section">
+          <div v-for="tc in toolCallEvents" :key="tc.id" class="inner-tool-call">
+            <span class="tool-call-icon">⚙</span>
+            <span class="tool-call-name">{{ tc.name }}</span>
+            <!-- 流式生成参数时显示滚动文本，生成完毕后显示格式化截断 JSON -->
+            <span v-if="streamingArgsMap.has(tc.id)" class="tool-call-args streaming">
+              {{ streamingArgsMap.get(tc.id)?.slice(-60) }}
+            </span>
+            <span v-else-if="Object.keys(tc.args).length > 0" class="tool-call-args">
+              {{ JSON.stringify(tc.args).slice(0, 80) }}{{ JSON.stringify(tc.args).length > 80 ? '…' : '' }}
+            </span>
+          </div>
         </div>
-      </div>
+      </NCollapseItem>
+
+      <!-- 流式输出文本 -->
+      <NCollapseItem v-if="accumulatedContent" title="思考过程" name="content">
+        <div class="accumulated-content">{{ accumulatedContent }}</div>
+      </NCollapseItem>
 
       <!-- 最终结果 -->
       <div v-if="subAgent.result" class="subagent-result">
@@ -102,13 +109,13 @@ const streamingArgsMap = computed(() => {
 
       <!-- 无内容提示 -->
       <div
-        v-if="!toolCallEvents.length && !subAgent.result && !subAgent.error"
+        v-if="!toolCallEvents.length && !accumulatedContent && !subAgent.result && !subAgent.error"
         class="subagent-empty"
       >
         <span v-if="subAgent.status === 'running'">执行中，等待结果…</span>
         <span v-else>无详细信息</span>
       </div>
-    </div>
+    </NCollapse>
   </div>
 </template>
 
@@ -240,6 +247,14 @@ const streamingArgsMap = computed(() => {
 .tool-call-args.streaming {
   color: #1677ff;
   font-style: italic;
+}
+
+.accumulated-content {
+  color: #555;
+  font-size: 12px;
+  white-space: pre-wrap;
+  max-height: 150px;
+  overflow-y: auto;
 }
 
 .subagent-result {

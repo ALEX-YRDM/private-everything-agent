@@ -15,7 +15,7 @@ const chat = useChatStore()
 const settings = useSettingsStore()
 const message = useMessage()
 const inputText = ref('')
-//const scrollbarRef = ref<InstanceType<typeof NScrollbar> | null>(null)
+const scrollbarRef = ref<InstanceType<typeof NScrollbar> | null>(null)
 
 const allMessages = computed(() => {
   const msgs = [...chat.messages]
@@ -50,8 +50,10 @@ function handleScroll() {
 
 onMounted(() => {
   nextTick(() => {
-    // 从哨兵元素向上遍历 DOM 找到 NScrollbar 的滚动容器（稳定可靠）
-    scrollContainer = messagesEndRef.value?.closest('.n-scrollbar-container') as HTMLElement | null
+    // 优先通过 scrollbarRef.$el 找滚动容器，fallback 到哨兵元素向上遍历
+    const rootEl = scrollbarRef.value?.$el as HTMLElement | undefined
+    scrollContainer = rootEl?.querySelector('.n-scrollbar-container') as HTMLElement | null
+      ?? messagesEndRef.value?.closest('.n-scrollbar-container') as HTMLElement | null
     scrollContainer?.addEventListener('scroll', handleScroll, { passive: true })
   })
 })

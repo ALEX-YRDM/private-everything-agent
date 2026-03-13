@@ -341,7 +341,20 @@ export const useChatStore = defineStore('chat', () => {
       // 从响应式数组中查找 sa，确保触发 Vue 响应式更新
       const sa = state.streamingMessage?.subAgents?.find(s => s.id === event.subagent_id)
       if (sa) {
-        sa.events.push(event.event)
+        const inner = event.event
+        // tool_call 事件：若同 id 已存在则就地更新（避免 early空参 和 full参 重复显示）
+        if (inner.type === 'tool_call') {
+          const existingIdx = sa.events.findIndex(
+            e => e.type === 'tool_call' && (e as typeof inner).id === inner.id
+          )
+          if (existingIdx >= 0) {
+            sa.events[existingIdx] = inner
+          } else {
+            sa.events.push(inner)
+          }
+        } else {
+          sa.events.push(inner)
+        }
       }
     } else if (event.type === 'subagent_done') {
       // 从响应式数组中查找 sa，确保触发 Vue 响应式更新
