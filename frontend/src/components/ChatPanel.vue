@@ -15,7 +15,7 @@ const chat = useChatStore()
 const settings = useSettingsStore()
 const message = useMessage()
 const inputText = ref('')
-const scrollbarRef = ref<InstanceType<typeof NScrollbar> | null>(null)
+//const scrollbarRef = ref<InstanceType<typeof NScrollbar> | null>(null)
 
 const allMessages = computed(() => {
   const msgs = [...chat.messages]

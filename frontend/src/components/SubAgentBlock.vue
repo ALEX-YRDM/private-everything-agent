@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref, computed } from 'vue'
-import { NTag, NCollapse, NCollapseItem } from 'naive-ui'
+import { NTag } from 'naive-ui'
 import type { SubAgentState } from '../stores/chat'
 import type { SubAgentInnerEvent } from '../api/websocket'
 
@@ -45,16 +45,16 @@ const streamingArgsMap = computed(() => {
   return acc
 })
 
-const contentEvents = computed(() =>
-  props.subAgent.events.filter(
-    (e): e is Extract<SubAgentInnerEvent, { type: 'content_delta' }> =>
-      e.type === 'content_delta'
-  )
-)
+// const contentEvents = computed(() =>
+//   props.subAgent.events.filter(
+//     (e): e is Extract<SubAgentInnerEvent, { type: 'content_delta' }> =>
+//       e.type === 'content_delta'
+//   )
+// )
 
-const accumulatedContent = computed(() =>
-  contentEvents.value.map((e) => e.content).join('')
-)
+// const accumulatedContent = computed(() =>
+//   contentEvents.value.map((e) => e.content).join('')
+// )
 </script>
 
 <template>
