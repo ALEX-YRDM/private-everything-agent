@@ -298,11 +298,12 @@ const reconnectingMcp = ref<number | null>(null)
 const mcpForm = ref({
   name: '',
   display_name: '',
-  transport: 'stdio' as 'stdio' | 'sse',
+  transport: 'stdio' as 'stdio' | 'sse' | 'streamable-http',
   command: '',       // 可执行文件，如 npx
   args: '',          // 参数，每行一个（或空格分隔）
   url: '',
   env: '',           // JSON 格式的环境变量
+  headers: '',       // JSON 格式的自定义请求头
   enabled: true,
 })
 
@@ -311,8 +312,9 @@ const mcpJsonImport = ref('')
 const mcpJsonError = ref('')
 
 const mcpTransportOptions = [
-  { label: 'stdio（本地进程，应用自动启动/关闭）', value: 'stdio' },
-  { label: 'SSE（远程服务）', value: 'sse' },
+  { label: 'stdio（本地进程，应用自动启动/关闭', value: 'stdio' },
+  { label: 'SSE（远程服务，传统 Server-Sent Events）', value: 'sse' },
+  { label: 'Streamable HTTP（推荐，自动回退 SSE）', value: 'streamable-http' },
 ]
 
 async function loadMcpServers() {
@@ -324,7 +326,7 @@ async function loadMcpServers() {
 
 function openAddMcp() {
   isNewMcp.value = true
-  mcpForm.value = { name: '', display_name: '', transport: 'stdio', command: '', args: '', url: '', env: '', enabled: true }
+  mcpForm.value = { name: '', display_name: '', transport: 'stdio', command: '', args: '', url: '', env: '', headers: '', enabled: true }
   mcpJsonImport.value = ''
   mcpJsonError.value = ''
   showMcpModal.value = true
@@ -340,6 +342,7 @@ function openEditMcp(srv: MCPServer) {
     args: (srv.args || []).join('\n'),
     url: srv.url || '',
     env: srv.env && Object.keys(srv.env).length ? JSON.stringify(srv.env, null, 2) : '',
+    headers: srv.headers && Object.keys(srv.headers).length ? JSON.stringify(srv.headers, null, 2) : '',
     enabled: !!srv.enabled,
   }
   mcpJsonImport.value = ''
@@ -379,8 +382,11 @@ function importMcpJson() {
       mcpForm.value.args = (cfg.args || []).join('\n')
       if (cfg.env) mcpForm.value.env = JSON.stringify(cfg.env, null, 2)
     } else if (cfg.url) {
-      mcpForm.value.transport = 'sse'
+      // 有 url 的远程服务，默认使用 streamable-http（自动回退 SSE）
+      mcpForm.value.transport = cfg.transport || 'streamable-http'
       mcpForm.value.url = cfg.url
+      if (cfg.headers) mcpForm.value.headers = JSON.stringify(cfg.headers, null, 2)
+      if (cfg.env) mcpForm.value.env = JSON.stringify(cfg.env, null, 2)
     } else {
       throw new Error('配置中既没有 command 也没有 url')
     }
@@ -403,7 +409,11 @@ function parseMcpForm() {
   if (mcpForm.value.env.trim()) {
     try { env = JSON.parse(mcpForm.value.env) } catch { /* ignore */ }
   }
-  return { args, env }
+  let headers: Record<string, string> = {}
+  if (mcpForm.value.headers.trim()) {
+    try { headers = JSON.parse(mcpForm.value.headers) } catch { /* ignore */ }
+  }
+  return { args, env, headers }
 }
 
 async function saveMcp() {
@@ -415,12 +425,12 @@ async function saveMcp() {
     message.warning('stdio 模式需要填写可执行文件（command），如 npx')
     return
   }
-  if (mcpForm.value.transport === 'sse' && !mcpForm.value.url.trim()) {
-    message.warning('SSE 模式需要填写服务地址')
+  if ((mcpForm.value.transport === 'sse' || mcpForm.value.transport === 'streamable-http') && !mcpForm.value.url.trim()) {
+    message.warning('远程模式需要填写服务地址')
     return
   }
   savingMcp.value = true
-  const { args, env } = parseMcpForm()
+  const { args, env, headers } = parseMcpForm()
   try {
     if (isNewMcp.value) {
       await api.mcpServers.create({
@@ -431,6 +441,7 @@ async function saveMcp() {
         args,
         url: mcpForm.value.url || null,
         env,
+        headers,
         enabled: mcpForm.value.enabled,
       })
       message.success(`MCP 服务器「${mcpForm.value.display_name}」已添加，正在尝试连接…`)
@@ -444,6 +455,7 @@ async function saveMcp() {
           args,
           url: mcpForm.value.url || null,
           env,
+          headers,
           enabled: mcpForm.value.enabled,
         })
         message.success(`已更新并重连「${mcpForm.value.display_name}」`)
@@ -892,9 +904,18 @@ onMounted(async () => {
         </NFormItem>
       </template>
 
-      <!-- sse 字段 -->
-      <NFormItem v-if="mcpForm.transport === 'sse'" label="服务地址">
-        <NInput v-model:value="mcpForm.url" placeholder="如：http://localhost:3000/sse" />
+      <!-- sse / streamable-http 字段 -->
+      <NFormItem v-if="mcpForm.transport === 'sse' || mcpForm.transport === 'streamable-http'" label="服务地址">
+        <NInput v-model:value="mcpForm.url" placeholder="如：https://mcp.example.com/mcp" />
+      </NFormItem>
+
+      <NFormItem v-if="mcpForm.transport === 'sse' || mcpForm.transport === 'streamable-http'" label="Headers（可选）">
+        <NInput
+          v-model:value="mcpForm.headers"
+          type="textarea"
+          :autosize="{ minRows: 2, maxRows: 4 }"
+          placeholder='JSON 格式，如 {"Authorization": "Bearer xxx"}'
+        />
       </NFormItem>
 
       <NFormItem label="env（可选）">

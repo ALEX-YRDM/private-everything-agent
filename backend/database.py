@@ -120,6 +120,7 @@ async def init_db():
             args         TEXT DEFAULT '[]',
             url          TEXT,
             env          TEXT DEFAULT '{}',
+            headers      TEXT DEFAULT '{}',
             enabled      INTEGER DEFAULT 1,
             created_at   TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             updated_at   TIMESTAMP DEFAULT CURRENT_TIMESTAMP
@@ -142,6 +143,14 @@ async def init_db():
         await _db.execute("ALTER TABLE provider_keys ADD COLUMN models TEXT DEFAULT '[]'")
         await _db.commit()
         logger.info("已迁移 provider_keys 表：添加 models 列")
+    except Exception:
+        pass  # 列已存在，忽略
+
+    # 迁移：旧库可能缺少 mcp_servers.headers 列
+    try:
+        await _db.execute("ALTER TABLE mcp_servers ADD COLUMN headers TEXT DEFAULT '{}'")
+        await _db.commit()
+        logger.info("已迁移 mcp_servers 表：添加 headers 列")
     except Exception:
         pass  # 列已存在，忽略
 
@@ -463,6 +472,10 @@ class DBManager:
             row["env"] = json.loads(row.get("env") or "{}")
         except Exception:
             row["env"] = {}
+        try:
+            row["headers"] = json.loads(row.get("headers") or "{}")
+        except Exception:
+            row["headers"] = {}
         return row
 
     async def list_mcp_servers(self) -> list[dict]:
@@ -486,31 +499,33 @@ class DBManager:
         args: list | None = None,
         url: str | None = None,
         env: dict | None = None,
+        headers: dict | None = None,
         enabled: bool = True,
     ) -> dict:
         cursor = await self.execute(
-            """INSERT INTO mcp_servers (name, display_name, transport, command, args, url, env, enabled)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+            """INSERT INTO mcp_servers (name, display_name, transport, command, args, url, env, headers, enabled)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 name, display_name, transport,
                 command or "",
                 json.dumps(args or [], ensure_ascii=False),
                 url,
                 json.dumps(env or {}, ensure_ascii=False),
+                json.dumps(headers or {}, ensure_ascii=False),
                 1 if enabled else 0,
             ),
         )
         return await self.get_mcp_server(cursor.lastrowid)
 
     async def update_mcp_server(self, server_id: int, **fields) -> dict | None:
-        allowed = {"name", "display_name", "transport", "command", "args", "url", "env", "enabled"}
+        allowed = {"name", "display_name", "transport", "command", "args", "url", "env", "headers", "enabled"}
         updates: dict = {}
         for k, v in fields.items():
             if k not in allowed:
                 continue
             if k == "args":
                 updates[k] = json.dumps(v or [], ensure_ascii=False)
-            elif k == "env":
+            elif k in ("env", "headers"):
                 updates[k] = json.dumps(v or {}, ensure_ascii=False)
             elif k == "enabled":
                 updates[k] = 1 if v else 0

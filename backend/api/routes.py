@@ -653,8 +653,9 @@ class MCPServerCreate(BaseModel):
     transport: str = "stdio"
     command: str = ""          # stdio: 可执行文件，如 "npx"
     args: list[str] = []       # stdio: 参数列表，如 ["-y", "xxx@latest"]
-    url: str | None = None     # sse: 服务地址
+    url: str | None = None     # sse/streamable-http: 服务地址
     env: dict[str, str] = {}
+    headers: dict[str, str] = {}   # sse/streamable-http: 自定义请求头
     enabled: bool = True
 
 
@@ -665,6 +666,7 @@ class MCPServerUpdate(BaseModel):
     args: list[str] | None = None
     url: str | None = None
     env: dict[str, str] | None = None
+    headers: dict[str, str] | None = None
     enabled: bool | None = None
 
 
@@ -698,6 +700,7 @@ async def create_mcp_server(request: Request, body: MCPServerCreate):
         args=body.args,
         url=body.url,
         env=body.env,
+        headers=body.headers,
         enabled=body.enabled,
     )
     if body.enabled:

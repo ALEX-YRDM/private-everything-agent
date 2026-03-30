@@ -86,11 +86,12 @@ export interface MCPServer {
   id: number
   name: string
   display_name: string
-  transport: 'stdio' | 'sse'
+  transport: 'stdio' | 'sse' | 'streamable-http'
   command: string        // stdio: 可执行文件，如 "npx"
   args: string[]         // stdio: 参数列表，如 ["-y", "xxx@latest"]
-  url: string | null     // sse: 服务地址
+  url: string | null     // sse/streamable-http: 服务地址
   env: Record<string, string>
+  headers: Record<string, string>  // sse/streamable-http: 自定义请求头
   enabled: number
   // 运行时状态（来自 MCPManager）
   status: 'connected' | 'disconnected' | 'error'
@@ -243,9 +244,10 @@ export const api = {
       args?: string[]
       url?: string | null
       env?: Record<string, string>
+      headers?: Record<string, string>
       enabled?: boolean
     }) => request<MCPServer>('/api/mcp-servers', { method: 'POST', body: JSON.stringify(data) }),
-    update: (id: number, data: Partial<Pick<MCPServer, 'display_name' | 'transport' | 'command' | 'args' | 'url' | 'env'> & { enabled: boolean }>) =>
+    update: (id: number, data: Partial<Pick<MCPServer, 'display_name' | 'transport' | 'command' | 'args' | 'url' | 'env' | 'headers'> & { enabled: boolean }>) =>
       request<MCPServer>(`/api/mcp-servers/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
     delete: (id: number) =>
       request<{ ok: boolean }>(`/api/mcp-servers/${id}`, { method: 'DELETE' }),

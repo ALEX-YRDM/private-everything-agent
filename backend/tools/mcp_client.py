@@ -5,6 +5,7 @@ try:
     from mcp import ClientSession, StdioServerParameters
     from mcp.client.stdio import stdio_client
     from mcp.client.sse import sse_client
+    from mcp.client.streamable_http import streamablehttp_client
     MCP_AVAILABLE = True
 except ImportError:
     MCP_AVAILABLE = False
@@ -95,11 +96,30 @@ class MCPManager:
                 )
                 read, write = await stack.enter_async_context(stdio_client(params))
 
-            elif transport == "sse":
+            elif transport in ("sse", "streamable-http"):
                 url = server.get("url")
                 if not url:
-                    raise ValueError("sse transport 需要填写 url")
-                read, write = await stack.enter_async_context(sse_client(url))
+                    raise ValueError(f"{transport} transport 需要填写 url")
+                headers: dict | None = server.get("headers") or None
+
+                if transport == "streamable-http":
+                    # 优先使用 Streamable HTTP，失败则回退 SSE
+                    try:
+                        read, write, _ = await stack.enter_async_context(
+                            streamablehttp_client(url, headers=headers)
+                        )
+                    except Exception as e:
+                        logger.info(f"MCP '{name}' streamable-http 连接失败，回退到 SSE: {e}")
+                        # 重建 stack（旧 stack 可能已部分进入）
+                        await stack.aclose()
+                        stack = AsyncExitStack()
+                        read, write = await stack.enter_async_context(
+                            sse_client(url, headers=headers)
+                        )
+                else:
+                    read, write = await stack.enter_async_context(
+                        sse_client(url, headers=headers)
+                    )
 
             else:
                 raise ValueError(f"不支持的 transport 类型: {transport}")
