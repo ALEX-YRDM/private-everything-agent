@@ -2,7 +2,7 @@
 import { ref, computed, onMounted, h } from 'vue'
 import {
   NDrawer, NDrawerContent, NSelect, NTag, NButton,
-  NModal, NForm, NFormItem, NInput,
+  NModal, NForm, NFormItem, NInput, NInputNumber,
   NDataTable, useMessage, NTabs, NTabPane, NSpace, NPopconfirm,
   NAlert, NSwitch, NTooltip, NSpin, NCollapse, NCollapseItem,
   NEmpty, NBadge,
@@ -505,8 +505,31 @@ function mcpStatusType(status: string): 'success' | 'error' | 'default' {
 }
 
 
+// ── LLM 运行参数 ─────────────────────────────────────────────────────────────
+const llmParamsForm = ref({
+  max_tokens: 4096,
+  temperature: 0.1,
+  context_window_tokens: 65536,
+  max_iterations: 40,
+})
+const savingLlmParams = ref(false)
+
+async function saveLlmParams() {
+  savingLlmParams.value = true
+  try {
+    await settings.updateLlmParams({ ...llmParamsForm.value })
+    message.success('参数已保存并立即生效')
+  } catch (e) {
+    message.error(`保存失败: ${String(e)}`)
+  } finally {
+    savingLlmParams.value = false
+  }
+}
+
 onMounted(async () => {
   await settings.init()
+  // 用 store 中已加载的值初始化表单
+  llmParamsForm.value = { ...settings.llmParams }
   await Promise.all([loadTemplates(), loadGlobalToolStates(), loadMcpServers()])
 })
 </script>
@@ -547,7 +570,73 @@ onMounted(async () => {
           </div>
         </NTabPane>
 
-        <!-- Tab 2: 服务商管理 -->
+        <!-- Tab 2: LLM 运行参数 -->
+        <NTabPane name="params" tab="⚙️ 参数">
+          <div class="section">
+            <h4>LLM 运行参数</h4>
+            <NAlert type="info" :show-icon="false" class="scope-tip">
+              修改后点击保存，立即全局生效，重启后保持。
+            </NAlert>
+            <NForm label-placement="left" label-width="130" style="margin-top:12px">
+              <NFormItem label="最大输出 Tokens">
+                <NInputNumber
+                  v-model:value="llmParamsForm.max_tokens"
+                  :min="256"
+                  :max="200000"
+                  :step="256"
+                  style="width:180px"
+                />
+                <template #feedback>
+                  <span style="font-size:11px;color:#999">每次回复最多生成的 token 数（建议 4096–32768）</span>
+                </template>
+              </NFormItem>
+              <NFormItem label="温度 Temperature">
+                <NInputNumber
+                  v-model:value="llmParamsForm.temperature"
+                  :min="0"
+                  :max="2"
+                  :step="0.1"
+                  :precision="1"
+                  style="width:180px"
+                />
+                <template #feedback>
+                  <span style="font-size:11px;color:#999">0 = 确定性，0.1–0.7 = 平衡，≥1 = 创意</span>
+                </template>
+              </NFormItem>
+              <NFormItem label="上下文窗口">
+                <NInputNumber
+                  v-model:value="llmParamsForm.context_window_tokens"
+                  :min="4096"
+                  :max="2000000"
+                  :step="4096"
+                  style="width:180px"
+                />
+                <template #feedback>
+                  <span style="font-size:11px;color:#999">模型最大上下文长度，用于触发自动记忆整合（超过 80%）</span>
+                </template>
+              </NFormItem>
+              <NFormItem label="最大迭代次数">
+                <NInputNumber
+                  v-model:value="llmParamsForm.max_iterations"
+                  :min="1"
+                  :max="200"
+                  :step="1"
+                  style="width:180px"
+                />
+                <template #feedback>
+                  <span style="font-size:11px;color:#999">每次回复 Agent 最多调用工具的轮次</span>
+                </template>
+              </NFormItem>
+            </NForm>
+            <NSpace justify="end" style="margin-top:8px">
+              <NButton type="primary" :loading="savingLlmParams" @click="saveLlmParams">
+                保存参数
+              </NButton>
+            </NSpace>
+          </div>
+        </NTabPane>
+
+        <!-- Tab 3: 服务商管理 -->
         <NTabPane name="providers" tab="🔑 服务商">
           <div class="section">
             <div class="section-header">
@@ -651,7 +740,7 @@ onMounted(async () => {
           </NCollapse>
         </NTabPane>
 
-        <!-- Tab 3: 工具全局管理 -->
+        <!-- Tab 4: 工具全局管理 -->
         <NTabPane name="tools" tab="🔧 工具">
           <div class="section">
             <h4>全局工具开关</h4>
@@ -681,7 +770,7 @@ onMounted(async () => {
           </div>
         </NTabPane>
 
-        <!-- Tab 4: MCP 服务器 -->
+        <!-- Tab 5: MCP 服务器 -->
         <NTabPane name="mcp" tab="🔌 MCP">
           <div class="section">
             <div class="section-header">
@@ -747,7 +836,7 @@ onMounted(async () => {
           </div>
         </NTabPane>
 
-        <!-- Tab 5: 技能管理 -->
+        <!-- Tab 6: 技能管理 -->
         <NTabPane name="skills" tab="⚡ 技能">
           <div class="section">
             <div class="section-header">
@@ -818,7 +907,7 @@ onMounted(async () => {
           </div>
         </NTabPane>
 
-        <!-- Tab 6: 提示词模板 -->
+        <!-- Tab 7: 提示词模板 -->
         <NTabPane name="templates" tab="📋 模板">
           <div class="section">
             <div class="section-header">

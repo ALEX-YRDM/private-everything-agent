@@ -268,28 +268,63 @@ async def list_tools(request: Request):
 
 @router.get("/config")
 async def get_config(request: Request):
-    """获取当前配置（不含敏感信息）。"""
+    """获取当前运行配置（返回 agent 实时值，不含敏感信息）。"""
     config = request.app.state.config
+    agent = request.app.state.agent
     return {
-        "model": config.llm.default_model,
-        "max_tokens": config.llm.max_tokens,
-        "temperature": config.llm.temperature,
-        "max_iterations": config.llm.max_iterations,
+        "model": agent.model,
+        "max_tokens": agent.max_tokens,
+        "temperature": agent.temperature,
+        "context_window_tokens": agent.memory.context_window_tokens,
+        "max_iterations": agent.max_iterations,
         "workspace": config.workspace,
         "restrict_to_workspace": config.tools.restrict_to_workspace,
-        "mcp_servers": [{"name": s.name, "transport": s.transport} for s in config.mcp_servers],
     }
 
 
 @router.put("/config/model")
 async def update_model(request: Request, body: dict):
-    """切换当前使用的模型。"""
+    """切换当前使用的模型，并持久化到数据库。"""
     agent = request.app.state.agent
     model = body.get("model")
     if not model:
         raise HTTPException(status_code=400, detail="缺少 model 参数")
     agent.model = model
+    await agent.memory.db.set_setting("llm_default_model", model)
     return {"ok": True, "model": model}
+
+
+class LLMParamsUpdate(BaseModel):
+    max_tokens: int | None = None
+    temperature: float | None = None
+    context_window_tokens: int | None = None
+    max_iterations: int | None = None
+
+
+@router.put("/config/llm")
+async def update_llm_params(request: Request, body: LLMParamsUpdate):
+    """更新 LLM 运行参数，立即生效并持久化到数据库（重启后保持）。"""
+    agent = request.app.state.agent
+    db = agent.memory.db
+    if body.max_tokens is not None:
+        agent.max_tokens = body.max_tokens
+        await db.set_setting("llm_max_tokens", str(body.max_tokens))
+    if body.temperature is not None:
+        agent.temperature = body.temperature
+        await db.set_setting("llm_temperature", str(body.temperature))
+    if body.context_window_tokens is not None:
+        agent.memory.context_window_tokens = body.context_window_tokens
+        await db.set_setting("llm_context_window_tokens", str(body.context_window_tokens))
+    if body.max_iterations is not None:
+        agent.max_iterations = body.max_iterations
+        await db.set_setting("llm_max_iterations", str(body.max_iterations))
+    return {
+        "model": agent.model,
+        "max_tokens": agent.max_tokens,
+        "temperature": agent.temperature,
+        "context_window_tokens": agent.memory.context_window_tokens,
+        "max_iterations": agent.max_iterations,
+    }
 
 
 # ── 模型配置接口 ────────────────────────────────────────────────────────────
@@ -386,8 +421,11 @@ async def switch_model(request: Request):
     agent = request.app.state.agent
     agent.model = model_id
 
-    # 查找并应用对应 provider 的 Key
+    # 持久化到 global_settings，重启后保持
     db = agent.memory.db
+    await db.set_setting("llm_default_model", model_id)
+
+    # 查找并应用对应 provider 的 Key
     provider = extract_provider(model_id)
     pk = await db.get_provider_key(provider)
     if pk:

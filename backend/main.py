@@ -280,13 +280,36 @@ async def lifespan(app: FastAPI):
         if srv.get("enabled"):
             await mcp_manager.connect(srv)
 
-    # 从数据库加载默认模型配置（如果有）
+    # 从数据库加载默认模型配置（如果有，作为中优先级兜底）
     default_cfg = await db.get_default_model_config()
     if default_cfg:
         agent.model = default_cfg["model_id"]
         agent.temperature = default_cfg["temperature"]
         agent.max_tokens = default_cfg["max_tokens"]
         logger.info(f"已从数据库加载默认模型配置: {default_cfg['name']} ({default_cfg['model_id']})")
+
+    # 从 global_settings 加载持久化的 LLM 运行参数（最高优先级，覆盖 .env 和 model_configs）
+    _gs_model = await db.get_setting("llm_default_model", "")
+    if _gs_model:
+        agent.model = _gs_model
+        logger.info(f"已从全局设置加载默认模型: {_gs_model}")
+    for _key, _attr, _cast in [
+        ("llm_max_tokens",            "max_tokens",                         int),
+        ("llm_temperature",           "temperature",                        float),
+        ("llm_max_iterations",        "max_iterations",                     int),
+    ]:
+        _val = await db.get_setting(_key, "")
+        if _val:
+            try:
+                setattr(agent, _attr, _cast(_val))
+            except (ValueError, TypeError):
+                pass
+    _ctx = await db.get_setting("llm_context_window_tokens", "")
+    if _ctx:
+        try:
+            agent.memory.context_window_tokens = int(_ctx)
+        except (ValueError, TypeError):
+            pass
 
     # 启动定时任务调度器
     scheduler = AgentScheduler(agent, db)

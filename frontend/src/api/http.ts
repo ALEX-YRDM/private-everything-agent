@@ -127,6 +127,16 @@ export interface ScheduledTask {
   created_at: string
 }
 
+export interface AppConfig {
+  model: string
+  max_tokens: number
+  temperature: number
+  context_window_tokens: number
+  max_iterations: number
+  workspace: string
+  restrict_to_workspace: boolean
+}
+
 export const api = {
   sessions: {
     list: () => request<{ sessions: Session[] }>('/api/sessions'),
@@ -169,11 +179,21 @@ export const api = {
     list: () => request<{ tools: string[] }>('/api/tools'),
   },
   config: {
-    get: () => request<Record<string, unknown>>('/api/config'),
+    get: () => request<AppConfig>('/api/config'),
     setModel: (model: string) =>
       request<{ ok: boolean; model: string }>('/api/config/model', {
         method: 'PUT',
         body: JSON.stringify({ model }),
+      }),
+    updateLlmParams: (params: {
+      max_tokens?: number
+      temperature?: number
+      context_window_tokens?: number
+      max_iterations?: number
+    }) =>
+      request<AppConfig>('/api/config/llm', {
+        method: 'PUT',
+        body: JSON.stringify(params),
       }),
   },
   providerKeys: {

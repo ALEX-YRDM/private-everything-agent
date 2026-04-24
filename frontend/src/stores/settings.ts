@@ -1,6 +1,6 @@
 import { ref, computed } from 'vue'
 import { defineStore } from 'pinia'
-import { api, type ModelInfo, type ProviderKey, type SystemSkill, type UserSkill } from '../api/http'
+import { api, type ModelInfo, type ProviderKey, type SystemSkill, type UserSkill, type AppConfig } from '../api/http'
 export type { SystemSkill, UserSkill }
 
 export type { ProviderKey }
@@ -8,13 +8,20 @@ export type { ProviderKey }
 // ── Pinia Store ──────────────────────────────────────────────────────────────
 
 export const useSettingsStore = defineStore('settings', () => {
-  const currentModel = ref<string>('openai/gpt-4o')
+  const currentModel = ref<string>('')
   const models = ref<ModelInfo[]>([])
   const tools = ref<string[]>([])
-  const config = ref<Record<string, unknown>>({})
+  const config = ref<Partial<AppConfig>>({})
   const showSettings = ref(false)
   const systemSkills = ref<SystemSkill[]>([])
   const userSkills = ref<UserSkill[]>([])
+
+  const llmParams = ref({
+    max_tokens: 4096,
+    temperature: 0.1,
+    context_window_tokens: 65536,
+    max_iterations: 40,
+  })
 
   // 从 DB 加载的 provider 列表（含模型）
   const providerGroups = ref<ProviderKey[]>([])
@@ -53,12 +60,22 @@ export const useSettingsStore = defineStore('settings', () => {
     try {
       const data = await api.config.get()
       config.value = data
-      if (data.model) {
-        currentModel.value = data.model as string
-      }
+      if (data.model) currentModel.value = data.model
+      llmParams.value.max_tokens = data.max_tokens
+      llmParams.value.temperature = data.temperature
+      llmParams.value.context_window_tokens = data.context_window_tokens
+      llmParams.value.max_iterations = data.max_iterations
     } catch (e) {
       console.error('加载配置失败', e)
     }
+  }
+
+  async function updateLlmParams(params: Partial<typeof llmParams.value>) {
+    const data = await api.config.updateLlmParams(params)
+    llmParams.value.max_tokens = data.max_tokens
+    llmParams.value.temperature = data.temperature
+    llmParams.value.context_window_tokens = data.context_window_tokens
+    llmParams.value.max_iterations = data.max_iterations
   }
 
   async function loadTools() {
@@ -112,11 +129,13 @@ export const useSettingsStore = defineStore('settings', () => {
     modelSelectOptions,
     systemSkills,
     userSkills,
+    llmParams,
     init,
     setModel,
     loadModels,
     loadProviders,
     loadSkills,
+    updateLlmParams,
   }
 })
 
