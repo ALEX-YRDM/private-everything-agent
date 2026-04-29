@@ -22,6 +22,7 @@ async def init_db():
             id          TEXT PRIMARY KEY,
             title       TEXT NOT NULL DEFAULT '新会话',
             model       TEXT,
+            parent_id   TEXT REFERENCES sessions(id) ON DELETE CASCADE,
             created_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             updated_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             metadata    JSON DEFAULT '{}'
@@ -40,30 +41,9 @@ async def init_db():
             is_consolidated INTEGER DEFAULT 0
         );
 
-        CREATE TABLE IF NOT EXISTS memory_store (
-            id          INTEGER PRIMARY KEY AUTOINCREMENT,
-            session_id  TEXT NOT NULL UNIQUE REFERENCES sessions(id) ON DELETE CASCADE,
-            memory_md   TEXT DEFAULT '',
-            history_md  TEXT DEFAULT '',
-            updated_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        );
-
         CREATE INDEX IF NOT EXISTS idx_messages_session_id ON messages(session_id);
         CREATE INDEX IF NOT EXISTS idx_messages_created_at ON messages(created_at);
-
-        -- 模型配置表
-        CREATE TABLE IF NOT EXISTS model_configs (
-            id          INTEGER PRIMARY KEY AUTOINCREMENT,
-            name        TEXT NOT NULL,
-            model_id    TEXT NOT NULL,
-            api_key     TEXT,
-            api_base    TEXT,
-            temperature REAL DEFAULT 0.1,
-            max_tokens  INTEGER DEFAULT 4096,
-            is_default  INTEGER DEFAULT 0,
-            enabled     INTEGER DEFAULT 1,
-            created_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        );
+        CREATE INDEX IF NOT EXISTS idx_sessions_parent_id ON sessions(parent_id);
 
         -- 提示词模板
         CREATE TABLE IF NOT EXISTS prompt_templates (
@@ -76,7 +56,7 @@ async def init_db():
             updated_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         );
 
-        -- 全局设置（键值存储，用于保存全局禁用工具等）
+        -- 全局设置（键值存储）
         CREATE TABLE IF NOT EXISTS global_settings (
             key        TEXT PRIMARY KEY,
             value      TEXT NOT NULL,
@@ -109,8 +89,7 @@ async def init_db():
             updated_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         );
 
-        -- MCP 服务器配置表（支持热插拔）
-        -- command/args 对应标准 MCP JSON 格式：{"command": "npx", "args": [...]}
+        -- MCP 服务器配置表
         CREATE TABLE IF NOT EXISTS mcp_servers (
             id           INTEGER PRIMARY KEY AUTOINCREMENT,
             name         TEXT NOT NULL UNIQUE,
@@ -126,7 +105,7 @@ async def init_db():
             updated_at   TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         );
 
-        -- 全局记忆表（单行 singleton，跨 session 共享，key=1）
+        -- 全局记忆表（单行 singleton，跨 session 共享）
         CREATE TABLE IF NOT EXISTS global_memory (
             id         INTEGER PRIMARY KEY CHECK (id = 1),
             memory_md  TEXT DEFAULT '',
@@ -138,21 +117,31 @@ async def init_db():
     """)
     await _db.commit()
 
-    # 迁移：旧库可能缺少 models 列
-    try:
-        await _db.execute("ALTER TABLE provider_keys ADD COLUMN models TEXT DEFAULT '[]'")
-        await _db.commit()
-        logger.info("已迁移 provider_keys 表：添加 models 列")
-    except Exception:
-        pass  # 列已存在，忽略
+    # ── 迁移旧库 ────────────────────────────────────────────────────────
+    for migration_sql, desc in [
+        ("ALTER TABLE provider_keys ADD COLUMN models TEXT DEFAULT '[]'", "provider_keys.models"),
+        ("ALTER TABLE mcp_servers ADD COLUMN headers TEXT DEFAULT '{}'", "mcp_servers.headers"),
+        ("ALTER TABLE sessions ADD COLUMN parent_id TEXT REFERENCES sessions(id) ON DELETE CASCADE", "sessions.parent_id"),
+    ]:
+        try:
+            await _db.execute(migration_sql)
+            await _db.commit()
+            logger.info(f"已迁移: 添加 {desc} 列")
+        except Exception:
+            pass  # 列已存在
 
-    # 迁移：旧库可能缺少 mcp_servers.headers 列
+    # 迁移旧 SubAgent 数据：将 metadata 中的 parent_session_id 写入 parent_id 列
     try:
-        await _db.execute("ALTER TABLE mcp_servers ADD COLUMN headers TEXT DEFAULT '{}'")
+        await _db.execute("""
+            UPDATE sessions
+            SET parent_id = json_extract(metadata, '$.parent_session_id')
+            WHERE parent_id IS NULL
+              AND json_extract(metadata, '$.is_subagent') = 1
+              AND json_extract(metadata, '$.parent_session_id') IS NOT NULL
+        """)
         await _db.commit()
-        logger.info("已迁移 mcp_servers 表：添加 headers 列")
     except Exception:
-        pass  # 列已存在，忽略
+        pass
 
     logger.info(f"数据库初始化完成: {DB_PATH}")
 
@@ -193,22 +182,6 @@ class DBManager:
         row = await cursor.fetchone()
         return dict(row) if row else None
 
-    async def get_memory(self, session_id: str) -> dict | None:
-        return await self.fetch_one(
-            "SELECT * FROM memory_store WHERE session_id = ?", (session_id,)
-        )
-
-    async def save_memory(self, session_id: str, memory_md: str, history_md: str):
-        await self.execute(
-            """INSERT INTO memory_store (session_id, memory_md, history_md)
-               VALUES (?, ?, ?)
-               ON CONFLICT(session_id) DO UPDATE SET
-               memory_md = excluded.memory_md,
-               history_md = excluded.history_md,
-               updated_at = CURRENT_TIMESTAMP""",
-            (session_id, memory_md, history_md),
-        )
-
     # ── 全局记忆（跨 session 共享，单行 singleton）──────────────────────────
 
     async def get_global_memory(self) -> dict:
@@ -243,49 +216,6 @@ class DBManager:
             f"UPDATE messages SET is_consolidated = 1 WHERE id IN ({placeholders})",
             tuple(message_ids),
         )
-
-    # ── 模型配置 CRUD ──────────────────────────────────────────────────────────
-
-    async def list_model_configs(self) -> list[dict]:
-        return await self.fetch_all("SELECT * FROM model_configs ORDER BY id ASC")
-
-    async def get_model_config(self, config_id: int) -> dict | None:
-        return await self.fetch_one("SELECT * FROM model_configs WHERE id = ?", (config_id,))
-
-    async def get_default_model_config(self) -> dict | None:
-        return await self.fetch_one(
-            "SELECT * FROM model_configs WHERE is_default = 1 AND enabled = 1 LIMIT 1"
-        )
-
-    async def create_model_config(self, name: str, model_id: str, api_key: str | None,
-                                   api_base: str | None, temperature: float, max_tokens: int) -> dict:
-        cursor = await self.execute(
-            """INSERT INTO model_configs (name, model_id, api_key, api_base, temperature, max_tokens)
-               VALUES (?, ?, ?, ?, ?, ?)""",
-            (name, model_id, api_key, api_base, temperature, max_tokens),
-        )
-        return await self.get_model_config(cursor.lastrowid)
-
-    async def update_model_config(self, config_id: int, **fields) -> dict | None:
-        allowed = {"name", "model_id", "api_key", "api_base", "temperature", "max_tokens", "enabled"}
-        updates = {k: v for k, v in fields.items() if k in allowed}
-        if not updates:
-            return await self.get_model_config(config_id)
-        set_clause = ", ".join(f"{k} = ?" for k in updates)
-        await self.execute(
-            f"UPDATE model_configs SET {set_clause} WHERE id = ?",
-            (*updates.values(), config_id),
-        )
-        return await self.get_model_config(config_id)
-
-    async def delete_model_config(self, config_id: int) -> bool:
-        cursor = await self.execute("DELETE FROM model_configs WHERE id = ?", (config_id,))
-        return cursor.rowcount > 0
-
-    async def set_default_model_config(self, config_id: int):
-        """将指定配置设为默认，同时取消其他配置的默认状态。"""
-        await self.execute("UPDATE model_configs SET is_default = 0")
-        await self.execute("UPDATE model_configs SET is_default = 1 WHERE id = ?", (config_id,))
 
     # ── 定时任务 CRUD ──────────────────────────────────────────────────────────
 
@@ -336,7 +266,6 @@ class DBManager:
     # ── Provider API Keys ──────────────────────────────────────────────────
 
     def _parse_provider_models(self, row: dict) -> dict:
-        """将 models JSON 字段反序列化为列表。"""
         try:
             row["models"] = json.loads(row.get("models") or "[]")
         except Exception:
@@ -362,11 +291,9 @@ class DBManager:
         models: list | None = None,
     ) -> dict:
         existing = await self.get_provider_key(provider)
-        # 未提供 models 时保留原有列表
         if models is None:
             models = existing["models"] if existing else []
         models_json = json.dumps(models, ensure_ascii=False)
-        # 未提供 api_key 时保留原有 key（传 None 且有旧值则不覆盖）
         if api_key is None and existing and existing.get("api_key"):
             api_key_val = existing["api_key"]
         else:
@@ -385,7 +312,6 @@ class DBManager:
         return await self.get_provider_key(provider)
 
     async def update_provider_models(self, provider: str, models: list) -> dict | None:
-        """更新指定 provider 的模型列表（不影响 key）。"""
         models_json = json.dumps(models, ensure_ascii=False)
         cursor = await self.execute(
             "UPDATE provider_keys SET models = ?, updated_at = CURRENT_TIMESTAMP WHERE provider = ?",
@@ -462,7 +388,6 @@ class DBManager:
     # ── MCP 服务器配置 CRUD ─────────────────────────────────────────────────
 
     def _parse_mcp_server(self, row: dict) -> dict:
-        # command 是可执行文件路径（字符串）
         row["command"] = row.get("command") or ""
         try:
             row["args"] = json.loads(row.get("args") or "[]")
@@ -567,4 +492,3 @@ class DBManager:
             "UPDATE sessions SET metadata = ? WHERE id = ?",
             (_json.dumps(metadata, ensure_ascii=False), session_id),
         )
-
