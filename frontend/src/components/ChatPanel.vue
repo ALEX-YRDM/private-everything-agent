@@ -16,6 +16,52 @@ const settings = useSettingsStore()
 const message = useMessage()
 const inputText = ref('')
 const scrollbarRef = ref<InstanceType<typeof NScrollbar> | null>(null)
+const fileInputRef = ref<HTMLInputElement | null>(null)
+
+// ── 图片附件 ─────────────────────────────────────────────────────────────────
+const MAX_IMAGE_SIZE = 10 * 1024 * 1024  // 10 MB
+const attachedImages = ref<string[]>([])
+
+/** 当前有效模型是否支持视觉输入 */
+const visionEnabled = computed(() => {
+  const modelId = sessionModel.value || settings.currentModel
+  return settings.modelSupportsVision(modelId)
+})
+
+function readFileAsDataURL(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onload = () => resolve(reader.result as string)
+    reader.onerror = reject
+    reader.readAsDataURL(file)
+  })
+}
+
+async function addImageFiles(files: FileList | File[]) {
+  for (const file of Array.from(files)) {
+    if (!file.type.startsWith('image/')) continue
+    if (file.size > MAX_IMAGE_SIZE) {
+      message.warning(`图片 ${file.name} 超过 10MB 限制`)
+      continue
+    }
+    const dataUrl = await readFileAsDataURL(file)
+    attachedImages.value.push(dataUrl)
+  }
+}
+
+function removeImage(index: number) {
+  attachedImages.value.splice(index, 1)
+}
+
+function onClickUpload() {
+  fileInputRef.value?.click()
+}
+
+function onFileChange(e: Event) {
+  const input = e.target as HTMLInputElement
+  if (input.files?.length) addImageFiles(input.files)
+  input.value = ''  // 重置，允许重复选择同一文件
+}
 
 const allMessages = computed(() => {
   const msgs = [...chat.messages]
@@ -76,17 +122,44 @@ watch(allMessages, () => scrollToBottom(), { deep: true })
 
 async function sendMessage() {
   const content = inputText.value.trim()
-  if (!content || chat.isStreaming) return
+  if ((!content && !attachedImages.value.length) || chat.isStreaming) return
+  const images = attachedImages.value.length ? [...attachedImages.value] : undefined
   inputText.value = ''
+  attachedImages.value = []
   isUserScrolledUp.value = false   // 用户主动发消息，强制回到底部
   scrollToBottom(true)
-  await chat.sendMessage(content)
+  await chat.sendMessage(content, images)
 }
 
 function handleKeydown(e: KeyboardEvent) {
   if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) {
     e.preventDefault()
     sendMessage()
+  }
+}
+
+// ── 拖拽和粘贴图片 ───────────────────────────────────────────────────────────
+function handleDrop(e: DragEvent) {
+  e.preventDefault()
+  if (!visionEnabled.value) return
+  const files = e.dataTransfer?.files
+  if (files?.length) addImageFiles(files)
+}
+
+function handlePaste(e: ClipboardEvent) {
+  if (!visionEnabled.value) return
+  const items = e.clipboardData?.items
+  if (!items) return
+  const imageFiles: File[] = []
+  for (const item of Array.from(items)) {
+    if (item.type.startsWith('image/')) {
+      const file = item.getAsFile()
+      if (file) imageFiles.push(file)
+    }
+  }
+  if (imageFiles.length) {
+    e.preventDefault()
+    addImageFiles(imageFiles)
   }
 }
 
@@ -282,7 +355,7 @@ loadTemplates()
             <NTooltip>
               <template #trigger>
                 <NButton
-                  size="tiny"
+                  size="small"
                   quaternary
                   :type="sessionModel ? 'warning' : 'default'"
                 >
@@ -325,7 +398,7 @@ loadTemplates()
           <template #trigger>
             <NTooltip>
               <template #trigger>
-                <NButton size="tiny" quaternary @click="showTemplatePicker = !showTemplatePicker">
+                <NButton size="small" quaternary @click="showTemplatePicker = !showTemplatePicker">
                   📋 模板
                 </NButton>
               </template>
@@ -370,7 +443,7 @@ loadTemplates()
           <template #trigger>
             <NTooltip>
               <template #trigger>
-                <NButton size="tiny" quaternary @click="showToolPanel = !showToolPanel">
+                <NButton size="small" quaternary @click="showToolPanel = !showToolPanel">
                   🔧 工具
                 </NButton>
               </template>
@@ -450,30 +523,50 @@ loadTemplates()
       </div>
 
       <!-- 输入框 + 发送按钮 -->
-      <div class="input-row">
-        <NInput
-          v-model:value="inputText"
-          type="textarea"
-          :autosize="{ minRows: 3, maxRows: 12 }"
-          :placeholder="chat.isStreaming ? '等待响应完成…' : '发送消息（Enter 发送，Shift+Enter 换行）'"
-          :disabled="chat.isStreaming"
-          @keydown="handleKeydown"
-          class="message-input"
-        />
-        <div class="send-btn">
-          <NTooltip v-if="chat.isStreaming">
-            <template #trigger>
-              <NButton type="error" size="medium" @click="chat.stopStreaming()">停止</NButton>
-            </template>
-            停止当前响应
-          </NTooltip>
-          <NButton
-            v-else
-            type="primary"
-            size="medium"
-            :disabled="!inputText.trim()"
-            @click="sendMessage"
-          >发送</NButton>
+      <div class="input-row" @drop.prevent="handleDrop" @dragover.prevent @paste="handlePaste">
+        <!-- 图片预览区 -->
+        <div v-if="attachedImages.length" class="attached-images">
+          <div v-for="(img, idx) in attachedImages" :key="idx" class="attached-image-item">
+            <img :src="img" class="attached-thumb" />
+            <button class="remove-image-btn" @click="removeImage(idx)">✕</button>
+          </div>
+        </div>
+        <div class="input-main">
+          <NInput
+            v-model:value="inputText"
+            type="textarea"
+            :autosize="{ minRows: 4, maxRows: 16 }"
+            :placeholder="chat.isStreaming ? '等待响应完成…' : '发送消息（Enter 发送，Shift+Enter 换行）'"
+            :disabled="chat.isStreaming"
+            @keydown="handleKeydown"
+            class="message-input"
+          />
+          <div class="input-actions">
+            <!-- 图片上传按钮 -->
+            <NTooltip v-if="visionEnabled">
+              <template #trigger>
+                <NButton size="medium" quaternary @click="onClickUpload" :disabled="chat.isStreaming">
+                  🖼️
+                </NButton>
+              </template>
+              上传图片（支持拖拽或 Ctrl+V 粘贴）
+            </NTooltip>
+            <input ref="fileInputRef" type="file" accept="image/*" multiple hidden @change="onFileChange" />
+            <!-- 发送/停止按钮 -->
+            <NTooltip v-if="chat.isStreaming">
+              <template #trigger>
+                <NButton type="error" size="large" @click="chat.stopStreaming()">停止</NButton>
+              </template>
+              停止当前响应
+            </NTooltip>
+            <NButton
+              v-else
+              type="primary"
+              size="large"
+              :disabled="!inputText.trim() && !attachedImages.length"
+              @click="sendMessage"
+            >发送</NButton>
+          </div>
         </div>
       </div>
     </div>
@@ -536,13 +629,13 @@ loadTemplates()
 
 .input-area {
   border-top: 1px solid #e8e8e8;
-  padding: 8px 16px 12px;
+  padding: 10px 20px 16px;
 }
 
 .input-toolbar {
   display: flex;
-  gap: 4px;
-  margin-bottom: 6px;
+  gap: 6px;
+  margin-bottom: 8px;
   align-items: center;
 }
 
@@ -568,13 +661,75 @@ loadTemplates()
 
 .input-row {
   display: flex;
+  flex-direction: column;
   gap: 8px;
-  align-items: flex-end;
+}
+
+.attached-images {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.attached-image-item {
+  position: relative;
+  display: inline-block;
+}
+
+.attached-thumb {
+  width: 96px;
+  height: 96px;
+  object-fit: cover;
+  border-radius: 8px;
+  border: 1px solid #d9d9d9;
+}
+
+.remove-image-btn {
+  position: absolute;
+  top: -6px;
+  right: -6px;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  border: none;
+  background: #ff4d4f;
+  color: white;
+  font-size: 12px;
+  line-height: 22px;
+  text-align: center;
+  cursor: pointer;
+  padding: 0;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.2);
+}
+
+.input-main {
+  display: flex;
+  gap: 10px;
+  align-items: stretch;
+}
+
+.input-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  flex-shrink: 0;
+  justify-content: flex-end;
 }
 
 .message-input { flex: 1; }
 
-.send-btn { flex-shrink: 0; }
+/* 让 NInput textarea 支持手动拖拽调整高度 */
+.message-input :deep(textarea) {
+  resize: vertical;
+  min-height: 100px;
+  font-size: 14px;
+  line-height: 1.6;
+}
+
+/* 发送/停止按钮加大 */
+.input-actions :deep(.n-button) {
+  min-width: 72px;
+}
 
 .no-session-hint {
   flex: 1;
