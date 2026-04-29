@@ -2,7 +2,7 @@ export type SubAgentInnerEvent =
   | { type: 'thinking'; content: string }
   | { type: 'tool_call'; name: string; id: string; args: Record<string, unknown> }
   | { type: 'tool_call_delta'; id: string; args_delta: string }
-  | { type: 'tool_result'; name: string; content: string }
+  | { type: 'tool_result'; id?: string; name: string; content: string }
   | { type: 'content_delta'; content: string }
   | { type: 'done'; content: string }
   | { type: 'error'; message: string }
@@ -10,7 +10,7 @@ export type SubAgentInnerEvent =
 export type StreamEvent =
   | { type: 'thinking'; content: string }
   | { type: 'tool_call'; name: string; id: string; args: Record<string, unknown> }
-  | { type: 'tool_result'; name: string; content: string }
+  | { type: 'tool_result'; id?: string; name: string; content: string }
   | { type: 'content_delta'; content: string }
   | { type: 'done'; content: string }
   | { type: 'error'; message: string }

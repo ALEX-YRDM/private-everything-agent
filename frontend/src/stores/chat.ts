@@ -303,7 +303,15 @@ export const useChatStore = defineStore('chat', () => {
       }
     } else if (event.type === 'tool_result') {
       if (state.streamingMessage?.toolCalls) {
-        const tc = [...state.streamingMessage.toolCalls].reverse().find((t) => t.name === event.name)
+        // 优先按 tool_call_id 精确匹配（后端已在 tool_result 事件中携带 id 字段）
+        const tcById = event.id
+          ? state.streamingMessage.toolCalls.find((t) => t.id === event.id)
+          : undefined
+        // 兜底：按 name 反向查找尚未有结果的 tool_call（兼容旧后端不携带 id 的情况）
+        const tc = tcById
+          ?? [...state.streamingMessage.toolCalls].reverse().find(
+              (t) => t.name === event.name && !state.streamingMessage!.toolResults![t.id]
+            )
         if (tc) {
           state.streamingMessage.toolResults![tc.id] = event.content
         }

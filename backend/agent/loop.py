@@ -247,7 +247,7 @@ class AgentLoop:
                         if len(result) > self.TOOL_RESULT_MAX_CHARS:
                             result = result[: self.TOOL_RESULT_MAX_CHARS] + "...[已截断]"
 
-                        yield {"type": "tool_result", "name": tc["name"], "content": result}
+                        yield {"type": "tool_result", "id": tc["id"], "name": tc["name"], "content": result}
 
                         tool_msg = {
                             "role": "tool",
