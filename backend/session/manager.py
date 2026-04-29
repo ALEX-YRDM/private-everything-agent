@@ -12,13 +12,13 @@ class SessionManager:
         self.db = db_manager
         self.max_history = max_history_messages
 
-    async def create_session(self, title: str = "新会话", model: str = None) -> dict:
+    async def create_session(self, title: str = "新会话", model: str = None, parent_id: str = None) -> dict:
         session_id = str(uuid.uuid4())
         await self.db.execute(
-            "INSERT INTO sessions (id, title, model) VALUES (?, ?, ?)",
-            (session_id, title, model),
+            "INSERT INTO sessions (id, title, model, parent_id) VALUES (?, ?, ?, ?)",
+            (session_id, title, model, parent_id),
         )
-        return {"id": session_id, "title": title, "model": model, "created_at": datetime.now().isoformat()}
+        return {"id": session_id, "title": title, "model": model, "parent_id": parent_id, "created_at": datetime.now().isoformat()}
 
     async def get_session(self, session_id: str) -> dict | None:
         return await self.db.fetch_one("SELECT * FROM sessions WHERE id = ?", (session_id,))
@@ -26,9 +26,7 @@ class SessionManager:
     async def list_sessions(self) -> list[dict]:
         """列出主会话（不含 SubAgent 子会话）。"""
         return await self.db.fetch_all(
-            """SELECT * FROM sessions
-               WHERE COALESCE(json_extract(metadata, '$.is_subagent'), 0) != 1
-               ORDER BY updated_at DESC"""
+            "SELECT * FROM sessions WHERE parent_id IS NULL ORDER BY updated_at DESC"
         )
 
     async def create_subagent_session(
@@ -37,12 +35,14 @@ class SessionManager:
         task_id: str,
         task: str,
     ) -> str:
-        """为 SubAgent 创建独立 Session，metadata 标记父会话关系。"""
-        import json as _json
-        session = await self.create_session(title=f"[子任务] {task[:30]}")
+        """为 SubAgent 创建独立 Session，使用 parent_id 列标记父会话关系。"""
+        session = await self.create_session(
+            title=f"[子任务] {task[:30]}",
+            parent_id=parent_session_id,
+        )
+        # metadata 中仍保留子任务详情，方便查询
         metadata = {
             "is_subagent": True,
-            "parent_session_id": parent_session_id,
             "subagent_task_id": task_id,
             "subagent_task": task,
         }
@@ -52,9 +52,7 @@ class SessionManager:
     async def get_subagent_sessions(self, parent_session_id: str) -> list[dict]:
         """获取某主会话下的所有 SubAgent 子会话。"""
         return await self.db.fetch_all(
-            """SELECT * FROM sessions
-               WHERE json_extract(metadata, '$.parent_session_id') = ?
-               ORDER BY created_at ASC""",
+            "SELECT * FROM sessions WHERE parent_id = ? ORDER BY created_at ASC",
             (parent_session_id,),
         )
 
