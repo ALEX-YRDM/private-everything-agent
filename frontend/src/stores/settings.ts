@@ -38,6 +38,17 @@ export const useSettingsStore = defineStore('settings', () => {
       }))
   })
 
+  /** 查询某 model_id 是否支持视觉输入。
+   *  策略：内置/已标记的模型按 supports_vision 字段；未标记或自定义模型默认 true（宽松）。 */
+  function modelSupportsVision(modelId: string): boolean {
+    if (!modelId) return false
+    for (const g of providerGroups.value) {
+      const m = g.models?.find((x) => x.id === modelId)
+      if (m) return m.supports_vision !== false  // 未明确 false 都视为支持
+    }
+    return true  // 未在注册表中找到的模型，默认放开
+  }
+
   async function loadProviders() {
     try {
       const data = await api.providerKeys.list()
@@ -127,6 +138,7 @@ export const useSettingsStore = defineStore('settings', () => {
     showSettings,
     providerGroups,
     modelSelectOptions,
+    modelSupportsVision,
     systemSkills,
     userSkills,
     llmParams,

@@ -17,6 +17,7 @@ export interface DisplayMessage {
   id: string
   role: 'user' | 'assistant' | 'tool'
   content: string
+  images?: string[]          // base64 data URL 图片列表（用户消息附图）
   reasoning?: string
   toolCalls?: ToolCallDisplay[]
   toolResults?: Record<string, string>
@@ -194,10 +195,24 @@ export const useChatStore = defineStore('chat', () => {
           }
         }
       } else if (m.role === 'user') {
+        // content 可能是纯文本或 JSON 多模态数组（含图片）
+        let textContent = m.content || ''
+        let images: string[] | undefined
+        if (textContent.startsWith('[')) {
+          try {
+            const parts = JSON.parse(textContent) as Array<{ type: string; text?: string; image_url?: { url: string } }>
+            textContent = parts.filter(p => p.type === 'text').map(p => p.text || '').join('\n')
+            images = parts.filter(p => p.type === 'image_url' && p.image_url?.url).map(p => p.image_url!.url)
+            if (!images.length) images = undefined
+          } catch {
+            // 解析失败就当作纯文本
+          }
+        }
         result.push({
           id: `msg-${m.id}`,
           role: 'user',
-          content: m.content || '',
+          content: textContent,
+          images,
           timestamp: new Date(m.created_at).getTime(),
         })
       }
@@ -421,7 +436,7 @@ export const useChatStore = defineStore('chat', () => {
     }
   }
 
-  async function sendMessage(content: string) {
+  async function sendMessage(content: string, images?: string[]) {
     const sessionId = currentSessionId.value
     if (!sessionId) return
 
@@ -432,6 +447,7 @@ export const useChatStore = defineStore('chat', () => {
       id: `user-${Date.now()}`,
       role: 'user',
       content,
+      images: images?.length ? images : undefined,
       timestamp: Date.now(),
     })
 
@@ -450,7 +466,7 @@ export const useChatStore = defineStore('chat', () => {
         }
       )
     }
-    ws.sendMessage(content)
+    ws.sendMessage(content, images)
   }
 
   function stopStreaming() {

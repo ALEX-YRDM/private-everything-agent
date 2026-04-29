@@ -1,11 +1,13 @@
 <script setup lang="ts">
-import { computed } from 'vue'
+import { ref, computed } from 'vue'
 import ThinkingBlock from './ThinkingBlock.vue'
 import ToolCallCard from './ToolCallCard.vue'
 import { renderMarkdown } from '../utils/markdown'
 import type { DisplayMessage } from '../stores/chat'
 
 const props = defineProps<{ message: DisplayMessage }>()
+
+const previewImage = ref<string | null>(null)
 
 const formattedTime = computed(() => {
   return new Date(props.message.timestamp).toLocaleTimeString('zh-CN', {
@@ -21,6 +23,15 @@ const renderedContent = computed(() => renderMarkdown(props.message.content))
   <div class="message-wrapper" :class="message.role">
     <div class="message-bubble" :class="message.role">
       <template v-if="message.role === 'user'">
+        <div v-if="message.images?.length" class="user-images">
+          <img
+            v-for="(img, idx) in message.images"
+            :key="idx"
+            :src="img"
+            class="user-image-thumb"
+            @click="previewImage = img"
+          />
+        </div>
         <div class="user-content">{{ message.content }}</div>
       </template>
 
@@ -42,6 +53,13 @@ const renderedContent = computed(() => renderMarkdown(props.message.content))
     </div>
     <div class="message-time">{{ formattedTime }}</div>
   </div>
+
+  <!-- 图片预览遮罩 -->
+  <Teleport to="body">
+    <div v-if="previewImage" class="image-preview-overlay" @click="previewImage = null">
+      <img :src="previewImage" class="image-preview-full" />
+    </div>
+  </Teleport>
 </template>
 
 <style scoped>
@@ -83,6 +101,40 @@ const renderedContent = computed(() => renderMarkdown(props.message.content))
   white-space: pre-wrap;
   font-size: 14px;
   line-height: 1.6;
+}
+
+.user-images {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 6px;
+}
+
+.user-image-thumb {
+  max-width: 160px;
+  max-height: 160px;
+  border-radius: 8px;
+  cursor: zoom-in;
+  border: 1px solid rgba(255,255,255,0.2);
+  object-fit: cover;
+}
+
+.image-preview-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,0.85);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 9999;
+  cursor: zoom-out;
+}
+
+.image-preview-full {
+  max-width: 92vw;
+  max-height: 92vh;
+  object-fit: contain;
+  border-radius: 6px;
 }
 
 .message-time {

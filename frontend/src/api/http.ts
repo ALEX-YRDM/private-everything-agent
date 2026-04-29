@@ -40,6 +40,7 @@ export interface ModelInfo {
 export interface ProviderModel {
   id: string
   label: string
+  supports_vision?: boolean
 }
 
 export interface ProviderKey {
