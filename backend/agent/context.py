@@ -54,6 +54,7 @@ class ContextBuilder:
         history: list[dict],
         user_content: str,
         session_id: str,
+        images: list[str] | None = None,
     ) -> list[dict]:
         """组合完整消息列表：system + 历史 + 当前消息。"""
         system_prompt = await self.build_system_prompt(session_id)
@@ -64,8 +65,18 @@ class ContextBuilder:
 
         messages = [{"role": "system", "content": system_prompt}]
         messages.extend(history)
-        messages.append({"role": "user", "content": f"{runtime}\n\n{user_content}"})
+        messages.append({"role": "user", "content": self._build_user_content(f"{runtime}\n\n{user_content}", images)})
         return messages
+
+    @staticmethod
+    def _build_user_content(text: str, images: list[str] | None = None):
+        """纯文本返回 str；有图片时返回 OpenAI 多模态 content 数组。"""
+        if not images:
+            return text
+        parts: list[dict] = [{"type": "text", "text": text}]
+        for img in images:
+            parts.append({"type": "image_url", "image_url": {"url": img}})
+        return parts
 
     def _default_identity(self) -> str:
         """默认 persona + 操作规范（AGENTS.md 不存在时使用）。"""

@@ -110,13 +110,23 @@ class SessionManager:
         session_id: str,
         user_content: str,
         new_messages: list[dict],
+        images: list[str] | None = None,
     ) -> None:
         """原子保存本轮对话到数据库（单次事务）。"""
         statements: list[tuple[str, tuple]] = []
 
+        # 用户消息：有图片时 content 存为 JSON 多模态数组，否则纯文本
+        if images:
+            parts = [{"type": "text", "text": user_content}]
+            for img in images:
+                parts.append({"type": "image_url", "image_url": {"url": img}})
+            user_content_db = json.dumps(parts, ensure_ascii=False)
+        else:
+            user_content_db = user_content
+
         statements.append((
             "INSERT INTO messages (session_id, role, content) VALUES (?, 'user', ?)",
-            (session_id, user_content),
+            (session_id, user_content_db),
         ))
 
         for msg in new_messages:

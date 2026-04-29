@@ -45,11 +45,12 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
                 if current_task and not current_task.done():
                     current_task.cancel()
 
-                async def stream_response(content: str):
+                async def stream_response(content: str, images: list[str] | None = None):
                     try:
                         async for event in agent.process_stream(
                             session_id=session_id,
                             user_content=content,
+                            images=images,
                         ):
                             await websocket.send_json(event)
                     except asyncio.CancelledError:
@@ -64,7 +65,9 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
                         except Exception:
                             pass
 
-                current_task = asyncio.create_task(stream_response(data["content"]))
+                current_task = asyncio.create_task(
+                    stream_response(data["content"], data.get("images"))
+                )
 
     except WebSocketDisconnect:
         manager.disconnect(websocket)
