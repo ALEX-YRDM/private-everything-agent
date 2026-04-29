@@ -37,17 +37,6 @@ export interface ModelInfo {
   provider: string
 }
 
-export interface ModelConfig {
-  id: number
-  name: string
-  model_id: string
-  temperature: number
-  max_tokens: number
-  is_default: number
-  enabled: number
-  created_at: string
-}
-
 export interface ProviderModel {
   id: string
   label: string
@@ -134,7 +123,6 @@ export interface AppConfig {
   context_window_tokens: number
   max_iterations: number
   workspace: string
-  restrict_to_workspace: boolean
 }
 
 export const api = {
@@ -216,17 +204,6 @@ export const api = {
       }),
     delete: (provider: string) =>
       request<{ ok: boolean }>(`/api/provider-keys/${provider}`, { method: 'DELETE' }),
-  },
-  modelConfigs: {
-    list: () => request<{ configs: ModelConfig[] }>('/api/model-configs'),
-    create: (data: { name: string; model_id: string; temperature?: number; max_tokens?: number }) =>
-      request<ModelConfig>('/api/model-configs', { method: 'POST', body: JSON.stringify(data) }),
-    update: (id: number, data: Partial<ModelConfig>) =>
-      request<ModelConfig>(`/api/model-configs/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
-    delete: (id: number) =>
-      request<{ ok: boolean }>(`/api/model-configs/${id}`, { method: 'DELETE' }),
-    activate: (id: number) =>
-      request<{ ok: boolean; active_model: string }>(`/api/model-configs/${id}/activate`, { method: 'POST' }),
   },
   templates: {
     list: () => request<{ templates: PromptTemplate[] }>('/api/templates'),
