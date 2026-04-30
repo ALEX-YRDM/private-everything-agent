@@ -29,6 +29,8 @@ export interface Message {
   tool_call_id: string | null
   tool_name: string | null
   reasoning: string | null
+  input_tokens: number | null
+  output_tokens: number | null
   created_at: string
 }
 

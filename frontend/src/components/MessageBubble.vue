@@ -51,7 +51,13 @@ const renderedContent = computed(() => renderMarkdown(props.message.content))
         <span v-if="message.isStreaming" class="cursor-blink">▋</span>
       </template>
     </div>
-    <div class="message-time">{{ formattedTime }}</div>
+    <div class="message-meta">
+      <span class="message-time">{{ formattedTime }}</span>
+      <span
+        v-if="message.role === 'assistant' && (message.inputTokens != null || message.outputTokens != null)"
+        class="token-info"
+      >· ↑{{ message.inputTokens?.toLocaleString() ?? '—' }} ↓{{ message.outputTokens?.toLocaleString() ?? '—' }}</span>
+    </div>
   </div>
 
   <!-- 图片预览遮罩 -->
@@ -137,11 +143,22 @@ const renderedContent = computed(() => renderMarkdown(props.message.content))
   border-radius: 6px;
 }
 
+.message-meta {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-top: 4px;
+  padding: 0 4px;
+}
+
 .message-time {
   font-size: 11px;
   color: #aaa;
-  margin-top: 4px;
-  padding: 0 4px;
+}
+
+.token-info {
+  font-size: 11px;
+  color: #bbb;
 }
 
 .cursor-blink {

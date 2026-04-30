@@ -23,6 +23,8 @@ export interface DisplayMessage {
   toolResults?: Record<string, string>
   subAgents?: SubAgentState[]
   isStreaming?: boolean
+  inputTokens?: number
+  outputTokens?: number
   timestamp: number
 }
 
@@ -182,6 +184,8 @@ export const useChatStore = defineStore('chat', () => {
           reasoning: m.reasoning || undefined,
           toolCalls: toolCalls.length > 0 ? toolCalls : undefined,
           toolResults: {},
+          inputTokens: m.input_tokens ?? undefined,
+          outputTokens: m.output_tokens ?? undefined,
           timestamp: new Date(m.created_at).getTime(),
         }
         result.push(msg)
