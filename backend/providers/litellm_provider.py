@@ -75,25 +75,43 @@ class LiteLLMProvider(LLMProvider):
     async def chat_stream(self, messages, tools=None, model="gpt-4o", **kwargs):
         """
         流式生成 StreamEvent。
-        当有工具调用时，LiteLLM 在 finish_reason=tool_calls 时一次性返回完整工具调用。
+
+        流式内容（content_delta / thinking / tool_call / tool_call_delta）在循环内实时 yield。
+        usage → done 或 tool_calls_ready 在循环结束后统一 yield，
+        保证 usage 一定先于终止事件到达消费者。
         """
         kw = self._build_kwargs(model, messages=messages, stream=True, **kwargs)
         if tools:
             kw["tools"] = tools
+        kw["stream_options"] = {"include_usage": True}
 
         accumulated_tool_calls: dict[int, dict] = {}
         accumulated_content = ""
         accumulated_reasoning = ""
+        accumulated_usage: dict | None = None
+        finish_reason_seen: str | None = None
+        pending_tool_calls_data: dict | None = None
 
         async for chunk in await litellm.acompletion(**kw):
             delta = chunk.choices[0].delta
             finish_reason = chunk.choices[0].finish_reason
 
+            # 捕获 usage（部分 provider 在 finish_reason chunk 携带，部分在独立末尾 chunk）
+            chunk_usage = getattr(chunk, "usage", None)
+            if chunk_usage is not None:
+                pt = getattr(chunk_usage, "prompt_tokens", None)
+                ct = getattr(chunk_usage, "completion_tokens", None)
+                if pt is not None or ct is not None:
+                    accumulated_usage = {
+                        "input_tokens": pt or 0,
+                        "output_tokens": ct or 0,
+                    }
+
             if delta.content:
                 accumulated_content += delta.content
                 yield StreamEvent(type="content_delta", content=delta.content)
 
-            # 思维链（DeepSeek R1 等）—— 同时累积，以便写回 assistant 消息
+            # 思维链（DeepSeek R1 等）
             reasoning = getattr(delta, "reasoning_content", None)
             if reasoning:
                 accumulated_reasoning += reasoning
@@ -112,16 +130,12 @@ class LiteLLMProvider(LLMProvider):
                         accumulated_tool_calls[idx]["arguments"] += tc_delta.function.arguments
 
                     tc_acc = accumulated_tool_calls[idx]
-
-                    # 一旦 id 和 name 就绪就立即推送 tool_call，让前端实时显示工具调用
                     if not tc_acc["_emitted"] and tc_acc["id"] and tc_acc["name"]:
                         tc_acc["_emitted"] = True
                         yield StreamEvent(
                             type="tool_call",
                             data={"id": tc_acc["id"], "name": tc_acc["name"], "args": {}},
                         )
-
-                    # 参数增量实时推送，让前端逐字显示正在生成的参数内容
                     if tc_delta.function and tc_delta.function.arguments and tc_acc["id"]:
                         yield StreamEvent(
                             type="tool_call_delta",
@@ -129,30 +143,33 @@ class LiteLLMProvider(LLMProvider):
                         )
 
             if finish_reason == "tool_calls":
+                finish_reason_seen = "tool_calls"
                 tool_calls = []
                 for tc in accumulated_tool_calls.values():
                     try:
                         args = json.loads(tc["arguments"]) if tc["arguments"] else {}
                     except json.JSONDecodeError:
                         args = {}
-                    tool_calls.append(
-                        ToolCallRequest(id=tc["id"], name=tc["name"], arguments=args)
-                    )
-                # tool_call 事件已在流式过程中提前发出，这里只需发 tool_calls_ready
-                yield StreamEvent(
-                    type="tool_calls_ready",
-                    data={
-                        "content": accumulated_content,
-                        # reasoning_content 需原样回传给 DeepSeek 等 reasoning 模型
-                        "reasoning_content": accumulated_reasoning or None,
-                        "tool_calls": [
-                            {"id": t.id, "name": t.name, "arguments": t.arguments}
-                            for t in tool_calls
-                        ],
-                    },
-                )
+                    tool_calls.append(ToolCallRequest(id=tc["id"], name=tc["name"], arguments=args))
+                pending_tool_calls_data = {
+                    "content": accumulated_content,
+                    "reasoning_content": accumulated_reasoning or None,
+                    "tool_calls": [
+                        {"id": t.id, "name": t.name, "arguments": t.arguments}
+                        for t in tool_calls
+                    ],
+                }
             elif finish_reason == "stop":
-                yield StreamEvent(type="done", content=accumulated_content)
+                finish_reason_seen = "stop"
+
+        # 循环结束后：先 yield usage（如有），再 yield 终止事件
+        if accumulated_usage:
+            yield StreamEvent(type="usage", data=accumulated_usage)
+
+        if finish_reason_seen == "tool_calls" and pending_tool_calls_data:
+            yield StreamEvent(type="tool_calls_ready", data=pending_tool_calls_data)
+        elif finish_reason_seen == "stop":
+            yield StreamEvent(type="done", content=accumulated_content)
 
     def _parse_response(self, response) -> LLMResponse:
         msg = response.choices[0].message
