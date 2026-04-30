@@ -88,7 +88,16 @@ class SessionManager:
             if found_user:
                 msg: dict = {"role": m["role"]}
                 if m["content"] is not None:
-                    msg["content"] = m["content"]
+                    content = m["content"]
+                    # 还原多模态内容：存库时是 JSON 字符串，取出时恢复为数组
+                    if isinstance(content, str) and content.startswith('['):
+                        try:
+                            parsed = json.loads(content)
+                            if isinstance(parsed, list):
+                                content = parsed
+                        except Exception:
+                            pass
+                    msg["content"] = content
                 if m["tool_calls"]:
                     msg["tool_calls"] = json.loads(m["tool_calls"])
                 if m["tool_call_id"]:

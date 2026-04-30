@@ -187,9 +187,24 @@ class MemoryManager:
         return total
 
     def _format_messages(self, messages: list[dict]) -> str:
+        import json as _json
         lines = []
         for m in messages:
             role = m["role"].upper()
-            content = str(m.get("content", ""))[:2000]
-            lines.append(f"[{role}]: {content}")
+            raw = m.get("content", "") or ""
+            # 多模态内容（数组或 JSON 字符串）：只保留文字，标注图片数量
+            if isinstance(raw, list):
+                parts = raw
+            elif isinstance(raw, str) and raw.startswith('['):
+                try:
+                    parts = _json.loads(raw)
+                except Exception:
+                    parts = None
+            else:
+                parts = None
+            if parts is not None:
+                text = " ".join(p.get("text", "") for p in parts if p.get("type") == "text")
+                imgs = sum(1 for p in parts if p.get("type") == "image_url")
+                raw = text + (f"（附{imgs}张图片）" if imgs else "")
+            lines.append(f"[{role}]: {str(raw)[:2000]}")
         return "\n".join(lines)
