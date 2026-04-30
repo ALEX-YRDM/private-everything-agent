@@ -134,6 +134,7 @@ class AgentLoop:
             for iteration in range(self.max_iterations):
                 accumulated_content = ""
                 tool_calls_ready = None
+                current_iter_usage: dict | None = None  # 本次 LLM call 的 token 用量
 
                 async for event in self.provider.chat_stream(
                     messages=messages,
@@ -154,6 +155,9 @@ class AgentLoop:
 
                     elif event.type == "tool_call_delta":
                         yield {"type": "tool_call_delta", **event.data}
+
+                    elif event.type == "usage":
+                        current_iter_usage = event.data
 
                     elif event.type == "tool_calls_ready":
                         tool_calls_ready = event.data
@@ -196,6 +200,9 @@ class AgentLoop:
                     }
                     if tc_reasoning:
                         assistant_msg["reasoning_content"] = tc_reasoning
+                    if current_iter_usage:
+                        assistant_msg["input_tokens"] = current_iter_usage.get("input_tokens")
+                        assistant_msg["output_tokens"] = current_iter_usage.get("output_tokens")
                     messages.append(assistant_msg)
                     new_messages.append(assistant_msg)
 
@@ -260,6 +267,9 @@ class AgentLoop:
                 else:
                     if final_content is not None:
                         assistant_msg = {"role": "assistant", "content": final_content}
+                        if current_iter_usage:
+                            assistant_msg["input_tokens"] = current_iter_usage.get("input_tokens")
+                            assistant_msg["output_tokens"] = current_iter_usage.get("output_tokens")
                         new_messages.append(assistant_msg)
                     break
             else:
@@ -304,7 +314,7 @@ class AgentLoop:
             if not is_subagent:
                 asyncio.create_task(
                     self.memory.maybe_consolidate(
-                        session_id, messages, self.provider, effective_model
+                        session_id, self.provider, effective_model
                     )
                 )
 

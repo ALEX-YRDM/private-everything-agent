@@ -22,12 +22,12 @@ class MemoryManager:
     async def maybe_consolidate(
         self,
         session_id: str,
-        messages: list[dict],
         provider,
         model: str,
     ) -> bool:
         """检查是否需要压缩，需要则执行。返回 True 表示执行了压缩。"""
-        if self._estimate_tokens(messages) < self.context_window_tokens * 0.8:
+        last_input_tokens = await self.db.get_last_input_tokens(session_id)
+        if last_input_tokens is None or last_input_tokens < self.context_window_tokens * 0.8:
             return False
 
         lock = self._locks.setdefault(session_id, asyncio.Lock())
@@ -159,32 +159,6 @@ class MemoryManager:
                             logger.info("全局用户画像已更新")
         except Exception as e:
             logger.warning(f"全局画像更新失败（非致命）: {e}")
-
-    def _estimate_tokens(self, messages: list[dict]) -> int:
-        """估算 token 数，针对中文字符做特殊处理（1 CJK ≈ 1 token，其余 4 chars ≈ 1 token）。"""
-        total = 0
-        for m in messages:
-            content = m.get("content") or ""
-            if isinstance(content, list):
-                text_content = ""
-                image_count = 0
-                for part in content:
-                    if isinstance(part, dict):
-                        if part.get("type") == "text":
-                            text_content += part.get("text", "")
-                        elif part.get("type") == "image_url":
-                            image_count += 1
-                    else:
-                        text_content += str(part)
-                total += image_count * 1000
-                content = text_content
-            cjk = sum(1 for c in content if "一" <= c <= "鿿" or "　" <= c <= "〿")
-            other = len(content) - cjk
-            total += cjk + other // 4
-            if m.get("tool_calls"):
-                total += len(str(m["tool_calls"])) // 4 + 20
-            total += 10
-        return total
 
     def _format_messages(self, messages: list[dict]) -> str:
         import json as _json
