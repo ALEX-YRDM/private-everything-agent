@@ -38,6 +38,8 @@ async def init_db():
             tool_call_id    TEXT,
             tool_name       TEXT,
             reasoning       TEXT,
+            input_tokens    INTEGER,
+            output_tokens   INTEGER,
             created_at      TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             is_consolidated INTEGER DEFAULT 0
         );
@@ -170,6 +172,16 @@ class DBManager:
                updated_at = CURRENT_TIMESTAMP""",
             (memory_md,),
         )
+
+    async def get_last_input_tokens(self, session_id: str) -> int | None:
+        """返回该 session 最近一次 LLM call 的 input_tokens（AutoCompact 触发依据）。"""
+        row = await self.fetch_one(
+            """SELECT input_tokens FROM messages
+               WHERE session_id = ? AND role = 'assistant' AND input_tokens IS NOT NULL
+               ORDER BY id DESC LIMIT 1""",
+            (session_id,),
+        )
+        return row["input_tokens"] if row else None
 
     async def get_unconsolidated_messages(self, session_id: str, limit: int = 50) -> list[dict]:
         return await self.fetch_all(
