@@ -46,6 +46,7 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
                     current_task.cancel()
 
                 async def stream_response(content: str, images: list[str] | None = None):
+                    done_sent = False
                     try:
                         async for event in agent.process_stream(
                             session_id=session_id,
@@ -53,11 +54,14 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
                             images=images,
                         ):
                             await websocket.send_json(event)
+                            if event.get("type") == "done":
+                                done_sent = True
                     except asyncio.CancelledError:
-                        try:
-                            await websocket.send_json({"type": "done", "content": ""})
-                        except Exception:
-                            pass
+                        if not done_sent:
+                            try:
+                                await websocket.send_json({"type": "done", "content": ""})
+                            except Exception:
+                                pass
                     except Exception as e:
                         logger.exception(f"流式响应出错: {e}")
                         try:

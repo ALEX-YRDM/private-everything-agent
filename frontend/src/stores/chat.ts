@@ -425,8 +425,9 @@ export const useChatStore = defineStore('chat', () => {
       state.streamingMessage = null
       console.error('Agent 错误:', event.message)
     } else if (event.type === 'session_title') {
-      // 自动更新会话标题
-      const session = sessions.value.find((s) => s.id === sessionId)
+      // 用事件携带的 session_id 精确匹配（后台广播场景），fallback 到当前 WS 的 sessionId
+      const targetId = event.session_id || sessionId
+      const session = sessions.value.find((s) => s.id === targetId)
       if (session) {
         session.title = event.title
       }

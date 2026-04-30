@@ -278,15 +278,11 @@ class AgentLoop:
 
             yield {"type": "done", "content": final_content}
 
-            # 主 Agent 才生成标题
+            # 主 Agent 才生成标题（后台任务，不阻塞主流程）
             if should_generate_title and final_content:
-                try:
-                    title = await self._generate_title(user_content, final_content, effective_model)
-                    if title:
-                        await self.sessions.update_title(session_id, title)
-                        yield {"type": "session_title", "title": title}
-                except Exception as e:
-                    logger.warning(f"生成会话标题失败: {e}")
+                asyncio.create_task(
+                    self._generate_title_and_notify(session_id, user_content, final_content, effective_model)
+                )
 
         except asyncio.CancelledError:
             logger.info(f"会话 {session_id} 的流式响应被取消")
@@ -311,6 +307,19 @@ class AgentLoop:
                         session_id, messages, self.provider, effective_model
                     )
                 )
+
+    async def _generate_title_and_notify(
+        self, session_id: str, user_message: str, ai_response: str, model: str
+    ):
+        """后台生成标题并广播 session_title 事件（通过 connection_manager）。"""
+        try:
+            title = await self._generate_title(user_message, ai_response, model)
+            if title:
+                await self.sessions.update_title(session_id, title)
+                from ..api.connection_manager import manager
+                await manager.broadcast({"type": "session_title", "title": title, "session_id": session_id})
+        except Exception as e:
+            logger.warning(f"生成会话标题失败: {e}")
 
     async def _generate_title(self, user_message: str, ai_response: str, model: str) -> str:
         """基于首轮对话内容生成简洁的会话标题。"""

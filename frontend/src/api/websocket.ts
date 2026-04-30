@@ -14,7 +14,7 @@ export type StreamEvent =
   | { type: 'content_delta'; content: string }
   | { type: 'done'; content: string }
   | { type: 'error'; message: string }
-  | { type: 'session_title'; title: string }
+  | { type: 'session_title'; title: string; session_id?: string }
   | { type: 'task_notification'; task_id: number; task_name: string; status: 'success' | 'error'; session_id: string | null; message: string }
   | { type: 'tool_call_delta'; id: string; args_delta: string }
   | { type: 'subagent_start'; subagent_id: string; session_id: string; task: string }
