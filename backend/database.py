@@ -23,6 +23,7 @@ async def init_db():
             title       TEXT NOT NULL DEFAULT '新会话',
             model       TEXT,
             parent_id   TEXT REFERENCES sessions(id) ON DELETE CASCADE,
+            summary     TEXT,
             created_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             updated_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             metadata    JSON DEFAULT '{}'
@@ -105,44 +106,16 @@ async def init_db():
             updated_at   TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         );
 
-        -- 全局记忆表（单行 singleton，跨 session 共享）
+        -- 全局记忆表（单行 singleton，跨 session 共享，仅存用户画像）
         CREATE TABLE IF NOT EXISTS global_memory (
             id         INTEGER PRIMARY KEY CHECK (id = 1),
             memory_md  TEXT DEFAULT '',
-            history_md TEXT DEFAULT '',
             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         );
-        INSERT OR IGNORE INTO global_memory (id, memory_md, history_md) VALUES (1, '', '');
+        INSERT OR IGNORE INTO global_memory (id, memory_md) VALUES (1, '');
 
     """)
     await _db.commit()
-
-    # ── 迁移旧库 ────────────────────────────────────────────────────────
-    for migration_sql, desc in [
-        ("ALTER TABLE provider_keys ADD COLUMN models TEXT DEFAULT '[]'", "provider_keys.models"),
-        ("ALTER TABLE mcp_servers ADD COLUMN headers TEXT DEFAULT '{}'", "mcp_servers.headers"),
-        ("ALTER TABLE sessions ADD COLUMN parent_id TEXT REFERENCES sessions(id) ON DELETE CASCADE", "sessions.parent_id"),
-    ]:
-        try:
-            await _db.execute(migration_sql)
-            await _db.commit()
-            logger.info(f"已迁移: 添加 {desc} 列")
-        except Exception:
-            pass  # 列已存在
-
-    # 迁移旧 SubAgent 数据：将 metadata 中的 parent_session_id 写入 parent_id 列
-    try:
-        await _db.execute("""
-            UPDATE sessions
-            SET parent_id = json_extract(metadata, '$.parent_session_id')
-            WHERE parent_id IS NULL
-              AND json_extract(metadata, '$.is_subagent') = 1
-              AND json_extract(metadata, '$.parent_session_id') IS NOT NULL
-        """)
-        await _db.commit()
-    except Exception:
-        pass
-
     logger.info(f"数据库初始化完成: {DB_PATH}")
 
 
@@ -188,15 +161,14 @@ class DBManager:
         row = await self.fetch_one("SELECT * FROM global_memory WHERE id = 1")
         return row or {"memory_md": "", "history_md": ""}
 
-    async def save_global_memory(self, memory_md: str, history_md: str):
+    async def save_global_memory(self, memory_md: str):
         await self.execute(
-            """INSERT INTO global_memory (id, memory_md, history_md)
-               VALUES (1, ?, ?)
+            """INSERT INTO global_memory (id, memory_md)
+               VALUES (1, ?)
                ON CONFLICT(id) DO UPDATE SET
                memory_md = excluded.memory_md,
-               history_md = excluded.history_md,
                updated_at = CURRENT_TIMESTAMP""",
-            (memory_md, history_md),
+            (memory_md,),
         )
 
     async def get_unconsolidated_messages(self, session_id: str, limit: int = 50) -> list[dict]:

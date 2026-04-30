@@ -25,8 +25,6 @@ class ContextBuilder:
         """构建 System Prompt（静态部分 + 动态记忆）。"""
         parts = []
 
-        # 身份定义：优先使用 AGENTS.md（允许完全自定义 persona）；
-        # 若不存在则使用内置默认身份。两种情况下都追加操作规范。
         agents_md = self.config_dir / "AGENTS.md"
         if agents_md.exists():
             parts.append(agents_md.read_text(encoding="utf-8"))
@@ -39,15 +37,26 @@ class ContextBuilder:
             if f.exists():
                 parts.append(f"## {fname}\n{f.read_text(encoding='utf-8')}")
 
+        session_summary = await self._get_session_summary(session_id)
+        if session_summary:
+            parts.append(f"## 本会话早期对话摘要\n{session_summary}")
+
         memory_ctx = await self.memory.get_memory_context_async(session_id)
         if memory_ctx:
-            parts.append(f"## 长期记忆\n{memory_ctx}")
+            parts.append(f"## 用户画像\n{memory_ctx}")
 
         skills_summary = self.skills.build_skills_summary()
         if skills_summary:
             parts.append(skills_summary)
 
         return "\n\n---\n\n".join(parts)
+
+    async def _get_session_summary(self, session_id: str) -> str:
+        """读取会话级 AutoCompact 摘要。"""
+        if not self.db:
+            return ""
+        row = await self.db.fetch_one("SELECT summary FROM sessions WHERE id = ?", (session_id,))
+        return (row or {}).get("summary") or ""
 
     async def build_messages(
         self,
@@ -113,43 +122,17 @@ class ContextBuilder:
         ]
 
     def _operational_rules(self) -> str:
-        """工作目录、工具使用判断、回复风格（始终包含）。"""
         return (
             "## 工作目录\n"
-            "- 工作目录根目录为 `workspace/`，**所有文件路径均相对于此根目录**\n"
-            "- `list_dir()` 或 `list_dir(\".\")` → 列出 workspace/ 根目录\n"
-            "- `read_file(\"README.md\")` → 读取 workspace/README.md\n"
-            "- `write_file(\"notes/todo.md\", ...)` → 写入 workspace/notes/todo.md\n"
-            "- ⚠️ **不要**传入 `\"workspace\"` 或 `\"workspace/foo\"`，会导致路径错误\n"
-            "- 创建用户技能：`write_file(\"skills/<技能名>/SKILL.md\", 内容)`\n\n"
-            "## 工具使用判断\n"
-            "**不是所有问题都需要工具**，按下列标准智能判断：\n\n"
-            "✅ **直接回答**（无需工具）：\n"
-            "- 通用知识、概念解释、简单计算、语言翻译\n"
-            "- 用户已提供所有信息、只需分析推理的任务\n"
-            "- 创意写作、头脑风暴等纯生成类任务\n\n"
-            "🔧 **使用工具**（需要外部信息或实际操作）：\n"
-            "- 需要获取实时 / 最新信息 → `web_search` + 按需 `web_fetch`\n"
-            "- 需要读写文件或查看目录 → `read_file` / `write_file` / `list_dir`\n"
-            "- 需要运行代码、安装依赖、执行命令 → `exec`\n"
-            "- 对技术事实不确定时，用工具查证后再回答\n\n"
-            "## 工具选择规范\n"
-            "- 读文件 → `read_file`，**不要用** `exec cat`\n"
-            "- 查找文件 → `list_dir`，**不要用** `exec find`\n"
-            "- 使用技能 → 调用 `read_skill(name=\"技能名称\")` 读取完整指导，名称来自 available_skills 列表\n"
-            "- 搜索信息 → 先 `web_search` 获取相关链接，再按需 `web_fetch` 读取详情\n"
-            "- 无依赖关系的多个工具可在同一轮并行调用\n"
-            "- 工具调用失败 → 分析原因，尝试替代方案，**不要反复重试同一操作**\n\n"
-            "## SubAgent 调度规范\n"
-            "当任务适合分解为多个**独立**子任务时，使用 `spawn_subagents` 并行派发：\n"
-            "- 子任务之间**无依赖关系**（可同时执行）\n"
-            "- 每个子任务需要不同的工具组合，或需要独立的搜索/分析\n"
-            "- 子任务描述必须**自包含**（不引用对话上下文）\n"
-            "- 串行任务、简单任务、或已有工具可直接完成的任务**不要**用 SubAgent\n\n"
+            "路径相对于 `workspace/`，直接写 `file.md` 或 `dir/file.md`，不要加 `workspace/` 前缀。\n"
+            "创建用户技能：`write_file(\"skills/<技能名>/SKILL.md\", 内容)`\n\n"
+            "## 工具使用\n"
+            "能直接回答（知识、推理、写作）则无需工具。"
+            "需实时信息用 `web_search`，文件操作用文件工具，执行命令用 `exec`。"
+            "无依赖关系的操作可在同一轮并行调用。\n\n"
+            "## SubAgent\n"
+            "仅当任务可拆分为相互独立的子任务时使用 `spawn_subagents`；"
+            "子任务描述须自包含，不引用对话上下文。串行或简单任务直接处理。\n\n"
             "## 回复风格\n"
-            "- **语言**：中文为主，代码、命令、专有名词保留原文\n"
-            "- **简洁**：不废话，不重复已知信息，不过度解释显而易见的事情\n"
-            "- **主动**：遇到歧义时，说明你的理解并直接处理，而非反复确认\n"
-            "- **格式**：善用 Markdown（代码块、列表、标题）让内容更易读\n"
-            "- **收尾**：任务完成后简洁总结做了什么、结果如何"
+            "中文为主，简洁直接，善用 Markdown；完成后简短总结结果。"
         )
