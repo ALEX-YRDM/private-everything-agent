@@ -145,7 +145,7 @@ class SessionManager:
             tool_calls = json.dumps(msg["tool_calls"], ensure_ascii=False) if msg.get("tool_calls") else None
             tool_call_id = msg.get("tool_call_id")
             tool_name = msg.get("name")
-            reasoning = msg.get("reasoning")
+            reasoning = msg.get("reasoning") or msg.get("reasoning_content")
             input_tokens = msg.get("input_tokens")
             output_tokens = msg.get("output_tokens")
             statements.append((

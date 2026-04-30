@@ -169,7 +169,11 @@ class LiteLLMProvider(LLMProvider):
         if finish_reason_seen == "tool_calls" and pending_tool_calls_data:
             yield StreamEvent(type="tool_calls_ready", data=pending_tool_calls_data)
         elif finish_reason_seen == "stop":
-            yield StreamEvent(type="done", content=accumulated_content)
+            yield StreamEvent(
+                type="done",
+                content=accumulated_content,
+                data={"reasoning_content": accumulated_reasoning} if accumulated_reasoning else None,
+            )
 
     def _parse_response(self, response) -> LLMResponse:
         msg = response.choices[0].message
