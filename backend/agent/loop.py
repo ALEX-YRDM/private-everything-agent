@@ -133,6 +133,7 @@ class AgentLoop:
 
         new_messages: list[dict] = []
         final_content: str | None = None
+        final_reasoning: str | None = None
         accumulated_content = ""
         _turn_saved = False   # 标记 save_turn 是否已在 try 块中提前完成
 
@@ -178,6 +179,7 @@ class AgentLoop:
 
                     elif event.type == "done":
                         final_content = event.content or accumulated_content
+                        final_reasoning = (event.data or {}).get("reasoning_content")
                         break
 
                     elif event.type == "error":
@@ -273,6 +275,8 @@ class AgentLoop:
                 else:
                     if final_content is not None:
                         assistant_msg = {"role": "assistant", "content": final_content}
+                        if final_reasoning:
+                            assistant_msg["reasoning_content"] = final_reasoning
                         if current_iter_usage:
                             assistant_msg["input_tokens"] = current_iter_usage.get("input_tokens")
                             assistant_msg["output_tokens"] = current_iter_usage.get("output_tokens")
@@ -292,7 +296,12 @@ class AgentLoop:
             except Exception as _save_err:
                 logger.warning(f"save_turn 提前保存失败，将在 finally 重试: {_save_err}")
 
-            yield {"type": "done", "content": final_content}
+            yield {
+                "type": "done",
+                "content": final_content,
+                "input_tokens": current_iter_usage.get("input_tokens") if current_iter_usage else None,
+                "output_tokens": current_iter_usage.get("output_tokens") if current_iter_usage else None,
+            }
 
             # 主 Agent 才生成标题（后台任务，不阻塞主流程）
             if should_generate_title and final_content:
