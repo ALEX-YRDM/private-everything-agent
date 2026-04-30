@@ -109,7 +109,8 @@ class SessionManager:
     async def get_messages_for_display(self, session_id: str) -> list[dict]:
         """返回用于前端展示的所有消息（包括已整合的）。"""
         return await self.db.fetch_all(
-            """SELECT id, role, content, tool_calls, tool_call_id, tool_name, reasoning, created_at
+            """SELECT id, role, content, tool_calls, tool_call_id, tool_name, reasoning,
+                      input_tokens, output_tokens, created_at
                FROM messages WHERE session_id = ? ORDER BY id ASC""",
             (session_id,),
         )
@@ -145,11 +146,15 @@ class SessionManager:
             tool_call_id = msg.get("tool_call_id")
             tool_name = msg.get("name")
             reasoning = msg.get("reasoning")
+            input_tokens = msg.get("input_tokens")
+            output_tokens = msg.get("output_tokens")
             statements.append((
                 """INSERT INTO messages
-                   (session_id, role, content, tool_calls, tool_call_id, tool_name, reasoning)
-                   VALUES (?, ?, ?, ?, ?, ?, ?)""",
-                (session_id, role, content, tool_calls, tool_call_id, tool_name, reasoning),
+                   (session_id, role, content, tool_calls, tool_call_id, tool_name, reasoning,
+                    input_tokens, output_tokens)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (session_id, role, content, tool_calls, tool_call_id, tool_name, reasoning,
+                 input_tokens, output_tokens),
             ))
 
         statements.append((
