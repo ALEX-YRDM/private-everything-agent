@@ -145,7 +145,20 @@ class MemoryManager:
         for m in messages:
             content = m.get("content") or ""
             if isinstance(content, list):
-                content = " ".join(str(c) for c in content)
+                # 处理多模态内容，区分文本和图像
+                text_content = ""
+                image_count = 0
+                for part in content:
+                    if isinstance(part, dict):
+                        if part.get("type") == "text":
+                            text_content += part.get("text", "")
+                        elif part.get("type") == "image_url":
+                            image_count += 1
+                    else:
+                        text_content += str(part)
+                # 图像按固定token数计算（每张图约1000 token，根据不同模型可能有差异，这里取保守值）
+                total += image_count * 1000
+                content = text_content
             # CJK 字符（中日韩）每个约 1 token
             cjk = sum(1 for c in content if "\u4e00" <= c <= "\u9fff" or "\u3000" <= c <= "\u303f")
             other = len(content) - cjk
