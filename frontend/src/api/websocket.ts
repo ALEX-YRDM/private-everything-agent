@@ -12,7 +12,7 @@ export type StreamEvent =
   | { type: 'tool_call'; name: string; id: string; args: Record<string, unknown> }
   | { type: 'tool_result'; id?: string; name: string; content: string }
   | { type: 'content_delta'; content: string }
-  | { type: 'done'; content: string }
+  | { type: 'done'; content: string; input_tokens?: number | null; output_tokens?: number | null }
   | { type: 'error'; message: string }
   | { type: 'session_title'; title: string; session_id?: string }
   | { type: 'task_notification'; task_id: number; task_name: string; status: 'success' | 'error'; session_id: string | null; message: string }

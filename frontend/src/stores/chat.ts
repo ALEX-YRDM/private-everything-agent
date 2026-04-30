@@ -158,9 +158,39 @@ export const useChatStore = defineStore('chat', () => {
 
   function convertMessages(rawMessages: Message[]): DisplayMessage[] {
     const result: DisplayMessage[] = []
+    // 当前正在积累的 assistant 轮次（一轮 = 多次 LLM 调用 + 工具结果，直到下一条 user 消息）
+    let pendingAssistant: DisplayMessage | null = null
+
+    function flushAssistant() {
+      if (pendingAssistant) {
+        // 修整：无 toolCalls 时清除空 toolResults
+        if (!pendingAssistant.toolCalls?.length) pendingAssistant.toolResults = undefined
+        result.push(pendingAssistant)
+        pendingAssistant = null
+      }
+    }
 
     for (const m of rawMessages) {
-      if (m.role === 'assistant') {
+      if (m.role === 'user') {
+        flushAssistant()
+        let textContent = m.content || ''
+        let images: string[] | undefined
+        if (textContent.startsWith('[')) {
+          try {
+            const parts = JSON.parse(textContent) as Array<{ type: string; text?: string; image_url?: { url: string } }>
+            textContent = parts.filter(p => p.type === 'text').map(p => p.text || '').join('\n')
+            images = parts.filter(p => p.type === 'image_url' && p.image_url?.url).map(p => p.image_url!.url)
+            if (!images.length) images = undefined
+          } catch {}
+        }
+        result.push({
+          id: `msg-${m.id}`,
+          role: 'user',
+          content: textContent,
+          images,
+          timestamp: new Date(m.created_at).getTime(),
+        })
+      } else if (m.role === 'assistant') {
         const toolCalls: ToolCallDisplay[] = []
         if (m.tool_calls) {
           try {
@@ -177,50 +207,41 @@ export const useChatStore = defineStore('chat', () => {
             }
           } catch {}
         }
-        const msg: DisplayMessage = {
-          id: `msg-${m.id}`,
-          role: 'assistant',
-          content: m.content || '',
-          reasoning: m.reasoning || undefined,
-          toolCalls: toolCalls.length > 0 ? toolCalls : undefined,
-          toolResults: {},
-          inputTokens: m.input_tokens ?? undefined,
-          outputTokens: m.output_tokens ?? undefined,
-          timestamp: new Date(m.created_at).getTime(),
+        if (!pendingAssistant) {
+          // 开始新的 assistant 轮次
+          pendingAssistant = {
+            id: `msg-${m.id}`,
+            role: 'assistant',
+            content: m.content || '',
+            reasoning: m.reasoning || undefined,
+            toolCalls: toolCalls.length > 0 ? toolCalls : undefined,
+            toolResults: {},
+            inputTokens: m.input_tokens ?? undefined,
+            outputTokens: m.output_tokens ?? undefined,
+            timestamp: new Date(m.created_at).getTime(),
+          }
+        } else {
+          // 同一轮：追加 toolCalls、更新 reasoning 和 content（用最新非空值）
+          if (toolCalls.length > 0) {
+            pendingAssistant.toolCalls = [...(pendingAssistant.toolCalls ?? []), ...toolCalls]
+          }
+          if (m.reasoning) {
+            pendingAssistant.reasoning = (pendingAssistant.reasoning ?? '') + m.reasoning
+          }
+          if (m.content) pendingAssistant.content = m.content
+          // 最终 assistant 消息的 token 数最准确，优先覆盖
+          if (m.input_tokens != null) pendingAssistant.inputTokens = m.input_tokens
+          if (m.output_tokens != null) pendingAssistant.outputTokens = m.output_tokens
         }
-        result.push(msg)
       } else if (m.role === 'tool' && m.tool_call_id) {
-        const toolCallId = m.tool_call_id
-        for (let i = result.length - 1; i >= 0; i--) {
-          const msg = result[i]
-          if (msg !== undefined && msg.role === 'assistant' && msg.toolResults !== undefined) {
-            msg.toolResults[toolCallId] = m.content || ''
-            break
-          }
+        if (pendingAssistant) {
+          if (!pendingAssistant.toolResults) pendingAssistant.toolResults = {}
+          pendingAssistant.toolResults[m.tool_call_id] = m.content || ''
         }
-      } else if (m.role === 'user') {
-        // content 可能是纯文本或 JSON 多模态数组（含图片）
-        let textContent = m.content || ''
-        let images: string[] | undefined
-        if (textContent.startsWith('[')) {
-          try {
-            const parts = JSON.parse(textContent) as Array<{ type: string; text?: string; image_url?: { url: string } }>
-            textContent = parts.filter(p => p.type === 'text').map(p => p.text || '').join('\n')
-            images = parts.filter(p => p.type === 'image_url' && p.image_url?.url).map(p => p.image_url!.url)
-            if (!images.length) images = undefined
-          } catch {
-            // 解析失败就当作纯文本
-          }
-        }
-        result.push({
-          id: `msg-${m.id}`,
-          role: 'user',
-          content: textContent,
-          images,
-          timestamp: new Date(m.created_at).getTime(),
-        })
       }
     }
+
+    flushAssistant()
     return result
   }
 
@@ -416,6 +437,8 @@ export const useChatStore = defineStore('chat', () => {
     } else if (event.type === 'done') {
       if (state.streamingMessage) {
         state.streamingMessage.isStreaming = false
+        if (event.input_tokens != null) state.streamingMessage.inputTokens = event.input_tokens
+        if (event.output_tokens != null) state.streamingMessage.outputTokens = event.output_tokens
         state.messages.push({ ...state.streamingMessage })
         state.streamingMessage = null
       }
