@@ -70,7 +70,7 @@ class ContextBuilder:
 
         now = datetime.now()
         weekdays = ["周一", "周二", "周三", "周四", "周五", "周六", "周日"]
-        runtime = f"当前时间：{now.strftime('%Y-%m-%d %H:%M:%S')}（{weekdays[now.weekday()]}）"
+        runtime = f"当前时间：{now.strftime('%Y-%m-%d')}（{weekdays[now.weekday()]}）"
 
         messages = [{"role": "system", "content": system_prompt}]
         messages.extend(history)
