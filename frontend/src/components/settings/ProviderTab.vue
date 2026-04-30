@@ -3,7 +3,7 @@ import { ref, computed } from 'vue'
 import {
   NButton, NSpace, NPopconfirm, NTag, NCollapse, NCollapseItem,
   NEmpty, NBadge, NTooltip, NSpin, NModal, NForm, NFormItem,
-  NInput, NAlert, useMessage,
+  NInput, NInputNumber, NSwitch, NAlert, useMessage,
 } from 'naive-ui'
 import { useSettingsStore, type ProviderKey } from '../../stores/settings'
 import { api, type ProviderModel } from '../../api/http'
@@ -61,18 +61,46 @@ async function deleteProvider(provider: string) {
 const showModelModal = ref(false)
 const editingModelProvider = ref('')
 const editingModelIndex = ref<number | null>(null)
-const modelForm = ref({ id: '', label: '' })
+const modelForm = ref({
+  id: '',
+  label: '',
+  supports_vision: true,
+  context_window_tokens: null as number | null,
+  max_tokens: null as number | null,
+})
 const testingModel = ref('')
 const testResults = ref<Record<string, 'ok' | 'fail' | 'testing'>>({})
 
-function openAddModel(provider: string) { editingModelProvider.value = provider; editingModelIndex.value = null; modelForm.value = { id: '', label: '' }; showModelModal.value = true }
-function openEditModel(provider: string, index: number, model: ProviderModel) { editingModelProvider.value = provider; editingModelIndex.value = index; modelForm.value = { id: model.id, label: model.label }; showModelModal.value = true }
+function openAddModel(provider: string) {
+  editingModelProvider.value = provider
+  editingModelIndex.value = null
+  modelForm.value = { id: '', label: '', supports_vision: true, context_window_tokens: null, max_tokens: null }
+  showModelModal.value = true
+}
+function openEditModel(provider: string, index: number, model: ProviderModel) {
+  editingModelProvider.value = provider
+  editingModelIndex.value = index
+  modelForm.value = {
+    id: model.id,
+    label: model.label,
+    supports_vision: model.supports_vision !== false,
+    context_window_tokens: model.context_window_tokens ?? null,
+    max_tokens: model.max_tokens ?? null,
+  }
+  showModelModal.value = true
+}
 async function saveModel() {
   if (!modelForm.value.id.trim() || !modelForm.value.label.trim()) { message.warning('请填写模型 ID 和显示名称'); return }
   const pk = settings.providerGroups.find(p => p.provider === editingModelProvider.value)
   if (!pk) return
   const models = [...pk.models]
-  const newModel: ProviderModel = { id: modelForm.value.id.trim(), label: modelForm.value.label.trim() }
+  const newModel: ProviderModel = {
+    id: modelForm.value.id.trim(),
+    label: modelForm.value.label.trim(),
+    supports_vision: modelForm.value.supports_vision,
+    context_window_tokens: modelForm.value.context_window_tokens ?? undefined,
+    max_tokens: modelForm.value.max_tokens ?? undefined,
+  }
   if (editingModelIndex.value === null) models.push(newModel); else models[editingModelIndex.value] = newModel
   try { await api.providerKeys.updateModels(editingModelProvider.value, models); showModelModal.value = false; await settings.loadProviders(); message.success('模型已保存') } catch (e) { message.error(String(e)) }
 }
@@ -135,6 +163,8 @@ function autoFillModelId() { if (!modelForm.value.id && editingModelProvider.val
           <div class="model-info">
             <span class="model-label">{{ model.label }}</span>
             <code class="model-id-text">{{ model.id }}</code>
+            <NTag v-if="model.supports_vision !== false" size="tiny" type="info">视觉</NTag>
+            <NTag v-if="model.context_window_tokens" size="tiny">{{ (model.context_window_tokens / 1000).toFixed(0) }}K 上下文</NTag>
           </div>
           <div class="model-actions">
             <NTag v-if="testResults[model.id] === 'ok'" type="success" size="tiny">✓ 可用</NTag>
@@ -175,13 +205,37 @@ function autoFillModelId() { if (!modelForm.value.id && editingModelProvider.val
   </NModal>
 
   <!-- 模型 Modal -->
-  <NModal v-model:show="showModelModal" preset="card" :title="editingModelIndex === null ? `为 ${editingModelProvider} 添加模型` : '编辑模型'" :style="{ width: '460px' }">
-    <NForm label-placement="left" label-width="90">
+  <NModal v-model:show="showModelModal" preset="card" :title="editingModelIndex === null ? `为 ${editingModelProvider} 添加模型` : '编辑模型'" :style="{ width: '480px' }">
+    <NForm label-placement="left" label-width="100">
       <NFormItem label="模型 ID">
         <NInput v-model:value="modelForm.id" placeholder="如：openai/gpt-4o" @focus="autoFillModelId" />
         <template #feedback><span style="font-size:11px;color:#999">格式：{provider}/{model_name}，参考 LiteLLM 文档</span></template>
       </NFormItem>
       <NFormItem label="显示名称"><NInput v-model:value="modelForm.label" placeholder="如：GPT-4o" /></NFormItem>
+      <NFormItem label="支持视觉">
+        <NSwitch v-model:value="modelForm.supports_vision" />
+        <template #feedback><span style="font-size:11px;color:#999">关闭后此模型不显示图片上传按钮</span></template>
+      </NFormItem>
+      <NFormItem label="上下文窗口">
+        <NInputNumber
+          v-model:value="modelForm.context_window_tokens"
+          :min="1024" :max="10000000" :step="4096"
+          placeholder="如：128000（覆盖全局设置）"
+          clearable
+          style="width:100%"
+        />
+        <template #feedback><span style="font-size:11px;color:#999">该模型最大输入 token 数，留空则使用全局配置</span></template>
+      </NFormItem>
+      <NFormItem label="最大输出 Tokens">
+        <NInputNumber
+          v-model:value="modelForm.max_tokens"
+          :min="1024" :max="1000000" :step="256"
+          placeholder="如：8192（覆盖全局设置）"
+          clearable
+          style="width:100%"
+        />
+        <template #feedback><span style="font-size:11px;color:#999">该模型每次回复最多生成的 token 数，留空则使用全局配置</span></template>
+      </NFormItem>
     </NForm>
     <template #footer>
       <NSpace justify="end">

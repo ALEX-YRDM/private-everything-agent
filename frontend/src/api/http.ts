@@ -43,6 +43,8 @@ export interface ProviderModel {
   id: string
   label: string
   supports_vision?: boolean
+  context_window_tokens?: number
+  max_tokens?: number
 }
 
 export interface ProviderKey {

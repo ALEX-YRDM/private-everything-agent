@@ -49,6 +49,23 @@ export const useSettingsStore = defineStore('settings', () => {
     return true  // 未在注册表中找到的模型，默认放开
   }
 
+  /** 返回模型专属的 context_window_tokens / max_tokens，未设置则回落到全局 llmParams。 */
+  function getModelParams(modelId: string): { context_window_tokens: number; max_tokens: number } {
+    for (const g of providerGroups.value) {
+      const m = g.models?.find((x) => x.id === modelId)
+      if (m) {
+        return {
+          context_window_tokens: m.context_window_tokens || llmParams.value.context_window_tokens,
+          max_tokens: m.max_tokens || llmParams.value.max_tokens,
+        }
+      }
+    }
+    return {
+      context_window_tokens: llmParams.value.context_window_tokens,
+      max_tokens: llmParams.value.max_tokens,
+    }
+  }
+
   async function loadProviders() {
     try {
       const data = await api.providerKeys.list()
@@ -139,6 +156,7 @@ export const useSettingsStore = defineStore('settings', () => {
     providerGroups,
     modelSelectOptions,
     modelSupportsVision,
+    getModelParams,
     systemSkills,
     userSkills,
     llmParams,
