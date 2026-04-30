@@ -264,6 +264,20 @@ const effectiveModel = computed(() =>
   sessionModel.value || settings.currentModel
 )
 
+/** 当前会话的上下文用量：取最后一条 assistant 消息的 inputTokens vs 模型上下文窗口 */
+const contextUsage = computed(() => {
+  const msgs = chat.messages
+  for (let i = msgs.length - 1; i >= 0; i--) {
+    const m = msgs[i]
+    if (m && m.role === 'assistant' && m.inputTokens != null) {
+      const params = settings.getModelParams(effectiveModel.value)
+      const pct = Math.round((m.inputTokens / params.context_window_tokens) * 100)
+      return { used: m.inputTokens, total: params.context_window_tokens, pct }
+    }
+  }
+  return null
+})
+
 async function setSessionModel(modelId: string | null | undefined) {
   if (!chat.currentSessionId) return
   // 空字符串 / undefined 视为清除
@@ -306,6 +320,14 @@ loadTemplates()
       <span class="chat-title">
         {{ chat.currentSession?.title || '选择或创建会话' }}
       </span>
+      <NTooltip v-if="contextUsage" placement="bottom">
+        <template #trigger>
+          <span class="context-usage" :class="{ warn: contextUsage.pct >= 60, danger: contextUsage.pct >= 80 }">
+            上下文 {{ contextUsage.pct }}%
+          </span>
+        </template>
+        已使用 {{ contextUsage.used.toLocaleString() }} / {{ contextUsage.total.toLocaleString() }} tokens（{{ contextUsage.pct }}%）
+      </NTooltip>
     </div>
 
     <!-- 消息区域 -->
@@ -588,6 +610,7 @@ loadTemplates()
 
 .chat-header {
   padding: 14px 20px;
+  padding-right: 100px; /* 为右上角固定按钮组留空 */
   border-bottom: 1px solid #e8e8e8;
   display: flex;
   align-items: center;
@@ -601,6 +624,31 @@ loadTemplates()
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  flex: 1;
+}
+
+.context-usage {
+  font-size: 12px;
+  color: #52c41a;
+  background: #f6ffed;
+  border: 1px solid #b7eb8f;
+  border-radius: 10px;
+  padding: 2px 8px;
+  white-space: nowrap;
+  cursor: default;
+  flex-shrink: 0;
+}
+
+.context-usage.warn {
+  color: #d46b08;
+  background: #fff7e6;
+  border-color: #ffd591;
+}
+
+.context-usage.danger {
+  color: #cf1322;
+  background: #fff1f0;
+  border-color: #ffa39e;
 }
 
 .messages-area { flex: 1; }
