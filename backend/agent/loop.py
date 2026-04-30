@@ -116,6 +116,12 @@ class AgentLoop:
             effective_model = model or session_model or self.model
             messages = await self.context.build_messages(history, user_content, session_id, images=images)
 
+        # 查询模型专属参数（未设置则回落到实例级全局值）
+        from ..providers.key_manager import get_model_params as _get_model_params
+        _mparams = _get_model_params(effective_model)
+        effective_max_tokens = _mparams.get("max_tokens") or self.max_tokens
+        effective_context_window = _mparams.get("context_window_tokens") or None
+
         # 构建工具定义：SubAgent 排除 spawn_subagents 且应用白名单
         exclude = {"spawn_subagents"} if is_subagent else None
         allowed = set(self.allowed_tools) if self.allowed_tools else None
@@ -141,7 +147,7 @@ class AgentLoop:
                     tools=tool_defs if tool_defs else None,
                     model=effective_model,
                     temperature=self.temperature,
-                    max_tokens=self.max_tokens,
+                    max_tokens=effective_max_tokens,
                 ):
                     if event.type == "content_delta":
                         accumulated_content += event.content
@@ -314,7 +320,8 @@ class AgentLoop:
             if not is_subagent:
                 asyncio.create_task(
                     self.memory.maybe_consolidate(
-                        session_id, self.provider, effective_model
+                        session_id, self.provider, effective_model,
+                        context_window=effective_context_window,
                     )
                 )
 

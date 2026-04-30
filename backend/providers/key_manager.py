@@ -38,6 +38,9 @@ PROVIDER_BASE_ENV_MAP: dict[str, str] = {
 # 所有 provider 都写入此表，方便 LiteLLM 调用时直接注入
 _registry: dict[str, dict] = {}
 
+# 模型参数注册表：model_id → {context_window_tokens, max_tokens}
+_model_registry: dict[str, dict] = {}
+
 
 def extract_provider(model_id: str) -> str:
     """
@@ -76,6 +79,28 @@ def apply_provider_key(provider: str, api_key: str | None, api_base: str | None)
             logger.info(f"已应用 {provider} API Base → {base_env}")
 
 
+def register_model_params(models: list[dict]) -> None:
+    """将模型列表中的参数写入内存注册表（context_window_tokens / max_tokens）。"""
+    for m in models:
+        model_id = m.get("id")
+        if not model_id:
+            continue
+        params = {}
+        if m.get("context_window_tokens"):
+            params["context_window_tokens"] = m["context_window_tokens"]
+        if m.get("max_tokens"):
+            params["max_tokens"] = m["max_tokens"]
+        if params:
+            _model_registry[model_id] = params
+        elif model_id in _model_registry:
+            del _model_registry[model_id]
+
+
+def get_model_params(model_id: str) -> dict:
+    """返回模型的自定义参数 {context_window_tokens?, max_tokens?}，未设置则返回空 dict。"""
+    return _model_registry.get(model_id, {})
+
+
 def get_provider_credentials(model_id: str) -> dict:
     """
     根据 model_id 前缀查询内存注册表，返回 {api_key, api_base}。
@@ -92,8 +117,17 @@ def get_provider_credentials(model_id: str) -> dict:
 
 async def apply_all_provider_keys(db_manager) -> None:
     """从数据库加载所有 provider keys，写入 os.environ 并填充内存注册表。"""
+    import json as _json
     keys = await db_manager.list_provider_keys()
     for row in keys:
         if row.get("api_key") or row.get("api_base"):
             apply_provider_key(row["provider"], row.get("api_key"), row.get("api_base"))
+        # 同步加载模型参数
+        models_raw = row.get("models")
+        if models_raw:
+            try:
+                models = _json.loads(models_raw) if isinstance(models_raw, str) else models_raw
+                register_model_params(models)
+            except Exception:
+                pass
     logger.info(f"已加载 {len(keys)} 个 Provider Key 配置")

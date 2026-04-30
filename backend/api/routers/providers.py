@@ -9,6 +9,9 @@ router = APIRouter(prefix="/provider-keys", tags=["providers"])
 class ProviderModel(BaseModel):
     id: str
     label: str
+    supports_vision: bool | None = None
+    context_window_tokens: int | None = None
+    max_tokens: int | None = None
 
 
 class ProviderKeyUpsert(BaseModel):
@@ -54,9 +57,12 @@ async def upsert_provider_key(body: ProviderKeyUpsert, db=Depends(get_db)):
 
 @router.put("/{provider}/models")
 async def update_provider_models(provider: str, body: list[ProviderModel], db=Depends(get_db)):
-    row = await db.update_provider_models(provider, [m.model_dump() for m in body])
+    from ...providers.key_manager import register_model_params
+    models_data = [m.model_dump() for m in body]
+    row = await db.update_provider_models(provider, models_data)
     if not row:
         raise HTTPException(status_code=404, detail="Provider 不存在")
+    register_model_params(models_data)
     return {"ok": True, "row": row}
 
 

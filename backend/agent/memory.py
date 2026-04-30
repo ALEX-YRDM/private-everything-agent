@@ -24,10 +24,12 @@ class MemoryManager:
         session_id: str,
         provider,
         model: str,
+        context_window: int | None = None,
     ) -> bool:
         """检查是否需要压缩，需要则执行。返回 True 表示执行了压缩。"""
+        effective_window = context_window or self.context_window_tokens
         last_input_tokens = await self.db.get_last_input_tokens(session_id)
-        if last_input_tokens is None or last_input_tokens < self.context_window_tokens * 0.8:
+        if last_input_tokens is None or last_input_tokens < effective_window * 0.8:
             return False
 
         lock = self._locks.setdefault(session_id, asyncio.Lock())
