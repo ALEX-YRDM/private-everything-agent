@@ -78,7 +78,7 @@ class AgentLoop:
             allowed_tools=allowed_tools,
         )
 
-    async def process_stream(self, session_id: str, user_content: str, model: str | None = None, images: list[str] | None = None):
+    async def process_stream(self, session_id: str, user_content: str, model: str | None = None, images: list[str] | None = None, files: list[dict] | None = None):
         """
         处理用户消息，以异步生成器方式 yield 事件字典。
 
@@ -114,7 +114,7 @@ class AgentLoop:
             session_model = (session_row or {}).get("model") or None
             session_overrides = session_meta.get("tool_overrides", {})
             effective_model = model or session_model or self.model
-            messages = await self.context.build_messages(history, user_content, session_id, images=images)
+            messages = await self.context.build_messages(history, user_content, session_id, images=images, files=files)
 
         # 查询模型专属参数（未设置则回落到实例级全局值）
         from ..providers.key_manager import get_model_params as _get_model_params
@@ -289,9 +289,9 @@ class AgentLoop:
             # 提前保存，确保 done 事件到达前端后 loadSessions() 能拿到最新 updated_at
             try:
                 if new_messages:
-                    await self.sessions.save_turn(session_id, user_content, new_messages, images=images)
+                    await self.sessions.save_turn(session_id, user_content, new_messages, images=images, files=files)
                 elif user_content:
-                    await self.sessions.save_turn(session_id, user_content, [], images=images)
+                    await self.sessions.save_turn(session_id, user_content, [], images=images, files=files)
                 _turn_saved = True
             except Exception as _save_err:
                 logger.warning(f"save_turn 提前保存失败，将在 finally 重试: {_save_err}")
@@ -321,9 +321,9 @@ class AgentLoop:
             # 若提前保存已成功则跳过，否则兜底保存（CancelledError / 异常路径）
             if not _turn_saved:
                 if new_messages:
-                    await self.sessions.save_turn(session_id, user_content, new_messages, images=images)
+                    await self.sessions.save_turn(session_id, user_content, new_messages, images=images, files=files)
                 elif user_content:
-                    await self.sessions.save_turn(session_id, user_content, [], images=images)
+                    await self.sessions.save_turn(session_id, user_content, [], images=images, files=files)
 
             # SubAgent 不做全局记忆整合（throwaway session）
             if not is_subagent:

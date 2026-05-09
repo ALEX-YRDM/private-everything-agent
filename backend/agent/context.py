@@ -64,6 +64,7 @@ class ContextBuilder:
         user_content: str,
         session_id: str,
         images: list[str] | None = None,
+        files: list[dict] | None = None,
     ) -> list[dict]:
         """组合完整消息列表：system + 历史 + 当前消息。"""
         system_prompt = await self.build_system_prompt(session_id)
@@ -72,9 +73,17 @@ class ContextBuilder:
         weekdays = ["周一", "周二", "周三", "周四", "周五", "周六", "周日"]
         runtime = f"当前时间：{now.strftime('%Y-%m-%d')}（{weekdays[now.weekday()]}）"
 
+        # 构建完整的用户消息内容，包括文件
+        full_content = f"{runtime}\n\n{user_content}"
+        if files:
+            for file_obj in files:
+                file_name = file_obj.get("name", "unknown")
+                file_content = file_obj.get("parsed_content", "")
+                full_content += f"\n\n[File: {file_name}]\n{file_content}"
+
         messages = [{"role": "system", "content": system_prompt}]
         messages.extend(history)
-        messages.append({"role": "user", "content": self._build_user_content(f"{runtime}\n\n{user_content}", images)})
+        messages.append({"role": "user", "content": self._build_user_content(full_content, images)})
         return messages
 
     @staticmethod

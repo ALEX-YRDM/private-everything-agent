@@ -1,11 +1,34 @@
 import aiosqlite
 import json
+import importlib.util
 from pathlib import Path
 from loguru import logger
 
 DB_PATH = Path("./data/agent.db")
 
 _db: aiosqlite.Connection | None = None
+
+
+async def _run_migrations() -> None:
+    """Run all migration scripts in the migrations directory."""
+    global _db
+    migrations_dir = Path(__file__).parent / "migrations"
+    if not migrations_dir.exists():
+        return
+
+    for migration_file in sorted(migrations_dir.glob("*.py")):
+        if migration_file.name.startswith("_"):
+            continue
+        try:
+            spec = importlib.util.spec_from_file_location(migration_file.stem, migration_file)
+            if spec and spec.loader:
+                module = importlib.util.module_from_spec(spec)
+                spec.loader.exec_module(module)
+                if hasattr(module, "migrate"):
+                    await module.migrate(_db)
+                    logger.info(f"Executed migration: {migration_file.name}")
+        except Exception as e:
+            logger.error(f"Migration {migration_file.name} failed: {e}")
 
 
 async def init_db():
@@ -40,6 +63,7 @@ async def init_db():
             reasoning       TEXT,
             input_tokens    INTEGER,
             output_tokens   INTEGER,
+            files           JSON DEFAULT NULL,
             created_at      TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             is_consolidated INTEGER DEFAULT 0
         );
@@ -119,6 +143,9 @@ async def init_db():
     """)
     await _db.commit()
     logger.info(f"数据库初始化完成: {DB_PATH}")
+
+    # 运行迁移脚本
+    await _run_migrations()
 
 
 async def close_db():

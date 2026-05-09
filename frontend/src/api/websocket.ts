@@ -52,9 +52,10 @@ export class AgentWebSocket {
     })
   }
 
-  sendMessage(content: string, images?: string[]): void {
+  sendMessage(content: string, images?: string[], files?: Array<{name: string; mime_type: string; content: string}>): void {
     const msg: Record<string, unknown> = { type: 'message', content }
     if (images?.length) msg.images = images
+    if (files?.length) msg.files = files
     this.ws?.send(JSON.stringify(msg))
   }
 

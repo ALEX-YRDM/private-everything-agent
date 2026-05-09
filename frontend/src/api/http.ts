@@ -31,6 +31,7 @@ export interface Message {
   reasoning: string | null
   input_tokens: number | null
   output_tokens: number | null
+  files: string | null
   created_at: string
 }
 

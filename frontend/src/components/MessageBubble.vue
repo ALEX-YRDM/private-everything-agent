@@ -1,13 +1,17 @@
 <script setup lang="ts">
 import { ref, computed } from 'vue'
+import { useMessage } from 'naive-ui'
 import ThinkingBlock from './ThinkingBlock.vue'
 import ToolCallCard from './ToolCallCard.vue'
 import { renderMarkdown } from '../utils/markdown'
+import { copyToClipboard, htmlToPlainText } from '../utils/clipboard'
 import type { DisplayMessage } from '../stores/chat'
 
 const props = defineProps<{ message: DisplayMessage }>()
+const msg = useMessage()
 
 const previewImage = ref<string | null>(null)
+const copiedIndex = ref<number | null>(null)
 
 const formattedTime = computed(() => {
   return new Date(props.message.timestamp).toLocaleTimeString('zh-CN', {
@@ -17,6 +21,27 @@ const formattedTime = computed(() => {
 })
 
 const renderedContent = computed(() => renderMarkdown(props.message.content))
+
+async function copyUserMessage() {
+  await copyToClipboard(
+    props.message.content,
+    undefined,
+    () => msg.success('已复制到剪切板'),
+    (error) => msg.error(`复制失败: ${error.message}`)
+  )
+}
+
+async function copyAssistantMessage() {
+  const plainText = props.message.content
+  const html = renderedContent.value
+
+  await copyToClipboard(
+    plainText,
+    html,
+    () => msg.success('已复制到剪切板'),
+    (error) => msg.error(`复制失败: ${error.message}`)
+  )
+}
 </script>
 
 <template>
@@ -32,7 +57,15 @@ const renderedContent = computed(() => renderMarkdown(props.message.content))
             @click="previewImage = img"
           />
         </div>
-        <div class="user-content">{{ message.content }}</div>
+        <div v-if="message.files?.length" class="user-files">
+          <div v-for="(file, idx) in message.files" :key="idx" class="file-item">
+            📎 {{ file.name }}
+          </div>
+        </div>
+        <div class="user-content-wrapper">
+          <div class="user-content">{{ message.content }}</div>
+          <button class="copy-btn" @click="copyUserMessage" title="复制到剪切板">📋</button>
+        </div>
       </template>
 
       <template v-else-if="message.role === 'assistant'">
@@ -43,11 +76,13 @@ const renderedContent = computed(() => renderMarkdown(props.message.content))
           :tool-call="tc"
           :result="message.toolResults?.[tc.id]"
         />
-        <div
-          v-if="message.content"
-          class="markdown-content"
-          v-html="renderedContent"
-        />
+        <div v-if="message.content" class="assistant-content-wrapper">
+          <div
+            class="markdown-content"
+            v-html="renderedContent"
+          />
+          <button class="copy-btn" @click="copyAssistantMessage" title="复制到剪切板">📋</button>
+        </div>
         <span v-if="message.isStreaming" class="cursor-blink">▋</span>
       </template>
     </div>
@@ -103,10 +138,43 @@ const renderedContent = computed(() => renderMarkdown(props.message.content))
   min-width: 100px;
 }
 
+.user-content-wrapper {
+  position: relative;
+  display: inline-block;
+  width: 100%;
+}
+
+.user-content-wrapper:hover .copy-btn,
+.assistant-content-wrapper:hover .copy-btn {
+  opacity: 1;
+}
+
 .user-content {
   white-space: pre-wrap;
   font-size: 14px;
   line-height: 1.6;
+}
+
+.assistant-content-wrapper {
+  position: relative;
+}
+
+.copy-btn {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.2s;
+  font-size: 14px;
+  padding: 4px;
+  border-radius: 4px;
+}
+
+.copy-btn:hover {
+  background: rgba(0, 0, 0, 0.1);
 }
 
 .user-images {
@@ -114,6 +182,22 @@ const renderedContent = computed(() => renderMarkdown(props.message.content))
   flex-wrap: wrap;
   gap: 6px;
   margin-bottom: 6px;
+}
+
+.user-files {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-bottom: 6px;
+  padding: 6px;
+  background: rgba(255, 255, 255, 0.1);
+  border-radius: 6px;
+}
+
+.file-item {
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.9);
+  word-break: break-all;
 }
 
 .user-image-thumb {

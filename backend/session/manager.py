@@ -110,7 +110,7 @@ class SessionManager:
         """返回用于前端展示的所有消息（包括已整合的）。"""
         return await self.db.fetch_all(
             """SELECT id, role, content, tool_calls, tool_call_id, tool_name, reasoning,
-                      input_tokens, output_tokens, created_at
+                      input_tokens, output_tokens, files, created_at
                FROM messages WHERE session_id = ? ORDER BY id ASC""",
             (session_id,),
         )
@@ -121,6 +121,7 @@ class SessionManager:
         user_content: str,
         new_messages: list[dict],
         images: list[str] | None = None,
+        files: list[dict] | None = None,
     ) -> None:
         """原子保存本轮对话到数据库（单次事务）。"""
         statements: list[tuple[str, tuple]] = []
@@ -134,9 +135,11 @@ class SessionManager:
         else:
             user_content_db = user_content
 
+        files_db = json.dumps(files, ensure_ascii=False) if files else None
+
         statements.append((
-            "INSERT INTO messages (session_id, role, content) VALUES (?, 'user', ?)",
-            (session_id, user_content_db),
+            "INSERT INTO messages (session_id, role, content, files) VALUES (?, 'user', ?, ?)",
+            (session_id, user_content_db, files_db),
         ))
 
         for msg in new_messages:

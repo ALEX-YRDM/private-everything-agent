@@ -22,6 +22,21 @@ const fileInputRef = ref<HTMLInputElement | null>(null)
 const MAX_IMAGE_SIZE = 10 * 1024 * 1024  // 10 MB
 const attachedImages = ref<string[]>([])
 
+// ── 文件附件 ─────────────────────────────────────────────────────────────────
+const MAX_FILE_SIZE = 10 * 1024 * 1024  // 10 MB
+const SUPPORTED_FILE_EXTENSIONS = new Set([
+  'txt', 'md', 'markdown', 'json', 'csv', 'yaml', 'yml',
+  'py', 'js', 'ts', 'tsx', 'jsx', 'java', 'cpp', 'c', 'h', 'go', 'rs', 'rb', 'php', 'sql', 'sh', 'bash', 'dockerfile', 'xml', 'html', 'css',
+  'docx', 'xlsx'
+])
+interface AttachedFile {
+  name: string
+  size: number
+  content: string  // base64
+}
+const attachedFiles = ref<AttachedFile[]>([])
+const fileInputRef2 = ref<HTMLInputElement | null>(null)
+
 /** 当前有效模型是否支持视觉输入 */
 const visionEnabled = computed(() => {
   const modelId = sessionModel.value || settings.currentModel
@@ -61,6 +76,57 @@ function onFileChange(e: Event) {
   const input = e.target as HTMLInputElement
   if (input.files?.length) addImageFiles(input.files)
   input.value = ''  // 重置，允许重复选择同一文件
+}
+
+function onClickUploadFile() {
+  fileInputRef2.value?.click()
+}
+
+function onFileInputChange(e: Event) {
+  const input = e.target as HTMLInputElement
+  if (input.files?.length) addFiles(input.files)
+  input.value = ''
+}
+
+function getFileExtension(filename: string): string {
+  const parts = filename.split('.')
+  return parts.length > 1 ? parts[parts.length - 1].toLowerCase() : ''
+}
+
+function formatFileSize(bytes: number): string {
+  if (bytes === 0) return '0 B'
+  const k = 1024
+  const sizes = ['B', 'KB', 'MB']
+  const i = Math.floor(Math.log(bytes) / Math.log(k))
+  return Math.round((bytes / Math.pow(k, i)) * 100) / 100 + ' ' + sizes[i]
+}
+
+async function addFiles(files: FileList | File[]) {
+  for (const file of Array.from(files)) {
+    if (file.size > MAX_FILE_SIZE) {
+      message.warning(`文件 ${file.name} 超过 10MB 限制`)
+      continue
+    }
+    const ext = getFileExtension(file.name)
+    if (!SUPPORTED_FILE_EXTENSIONS.has(ext)) {
+      message.warning(`不支持的文件类型: .${ext}`)
+      continue
+    }
+    try {
+      const content = await readFileAsDataURL(file)
+      attachedFiles.value.push({
+        name: file.name,
+        size: file.size,
+        content
+      })
+    } catch (e) {
+      message.error(`读取文件 ${file.name} 失败`)
+    }
+  }
+}
+
+function removeFile(index: number) {
+  attachedFiles.value.splice(index, 1)
 }
 
 const allMessages = computed(() => {
@@ -122,13 +188,32 @@ watch(allMessages, () => scrollToBottom(), { deep: true })
 
 async function sendMessage() {
   const content = inputText.value.trim()
-  if ((!content && !attachedImages.value.length) || chat.isStreaming) return
+  if ((!content && !attachedImages.value.length && !attachedFiles.value.length) || chat.isStreaming) return
   const images = attachedImages.value.length ? [...attachedImages.value] : undefined
+  const files = attachedFiles.value.length ? attachedFiles.value.map(f => ({
+    name: f.name,
+    mime_type: getMimeType(f.name),
+    content: f.content.split(',')[1] || f.content  // 提取 base64 部分
+  })) : undefined
   inputText.value = ''
   attachedImages.value = []
+  attachedFiles.value = []
   isUserScrolledUp.value = false   // 用户主动发消息，强制回到底部
   scrollToBottom(true)
-  await chat.sendMessage(content, images)
+  await chat.sendMessage(content, images, files)
+}
+
+function getMimeType(filename: string): string {
+  const ext = getFileExtension(filename)
+  const mimeMap: Record<string, string> = {
+    'txt': 'text/plain',
+    'md': 'text/markdown',
+    'json': 'application/json',
+    'csv': 'text/csv',
+    'docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    'xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  }
+  return mimeMap[ext] || 'text/plain'
 }
 
 function handleKeydown(e: KeyboardEvent) {
@@ -141,9 +226,30 @@ function handleKeydown(e: KeyboardEvent) {
 // ── 拖拽和粘贴图片 ───────────────────────────────────────────────────────────
 function handleDrop(e: DragEvent) {
   e.preventDefault()
-  if (!visionEnabled.value) return
   const files = e.dataTransfer?.files
-  if (files?.length) addImageFiles(files)
+  if (!files?.length) return
+
+  // 分离图片和其他文件
+  const imageFiles: File[] = []
+  const otherFiles: File[] = []
+
+  for (const file of Array.from(files)) {
+    if (file.type.startsWith('image/')) {
+      imageFiles.push(file)
+    } else {
+      otherFiles.push(file)
+    }
+  }
+
+  // 添加图片（如果启用视觉输入）
+  if (imageFiles.length && visionEnabled.value) {
+    addImageFiles(imageFiles)
+  }
+
+  // 添加其他文件
+  if (otherFiles.length) {
+    addFiles(otherFiles)
+  }
 }
 
 function handlePaste(e: ClipboardEvent) {
@@ -553,6 +659,13 @@ loadTemplates()
             <button class="remove-image-btn" @click="removeImage(idx)">✕</button>
           </div>
         </div>
+        <!-- 文件附件区 -->
+        <div v-if="attachedFiles.length" class="attached-files">
+          <div v-for="(file, idx) in attachedFiles" :key="idx" class="attached-file-item">
+            <span class="file-name">📎 {{ file.name }}</span>
+            <button class="remove-file-btn" @click="removeFile(idx)">✕</button>
+          </div>
+        </div>
         <div class="input-main">
           <NInput
             v-model:value="inputText"
@@ -574,6 +687,16 @@ loadTemplates()
               上传图片（支持拖拽或 Ctrl+V 粘贴）
             </NTooltip>
             <input ref="fileInputRef" type="file" accept="image/*" multiple hidden @change="onFileChange" />
+            <!-- 文件上传按钮 -->
+            <NTooltip>
+              <template #trigger>
+                <NButton size="medium" quaternary @click="onClickUploadFile" :disabled="chat.isStreaming">
+                  📁
+                </NButton>
+              </template>
+              上传文件（支持拖拽）
+            </NTooltip>
+            <input ref="fileInputRef2" type="file" multiple hidden @change="onFileInputChange" />
             <!-- 发送/停止按钮 -->
             <NTooltip v-if="chat.isStreaming">
               <template #trigger>
@@ -585,7 +708,7 @@ loadTemplates()
               v-else
               type="primary"
               size="large"
-              :disabled="!inputText.trim() && !attachedImages.length"
+              :disabled="!inputText.trim() && !attachedImages.length && !attachedFiles.length"
               @click="sendMessage"
             >发送</NButton>
           </div>
@@ -722,6 +845,44 @@ loadTemplates()
 .attached-image-item {
   position: relative;
   display: inline-block;
+}
+
+.attached-files {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px 12px;
+  background: #f5f5f5;
+  border-radius: 6px;
+  border: 1px dashed #d9d9d9;
+}
+
+.attached-file-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 13px;
+  color: #595959;
+  padding: 4px 0;
+}
+
+.file-name {
+  word-break: break-all;
+  flex: 1;
+}
+
+.remove-file-btn {
+  background: transparent;
+  border: none;
+  color: #999;
+  cursor: pointer;
+  padding: 2px 4px;
+  font-size: 16px;
+}
+
+.remove-file-btn:hover {
+  color: #ff4d4f;
 }
 
 .attached-thumb {

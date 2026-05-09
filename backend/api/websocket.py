@@ -2,6 +2,7 @@ import asyncio
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from loguru import logger
 from .connection_manager import manager
+from ..tools.file_parser import parse_file
 
 router = APIRouter()
 
@@ -45,13 +46,46 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
                 if current_task and not current_task.done():
                     current_task.cancel()
 
-                async def stream_response(content: str, images: list[str] | None = None):
+                # Process file attachments if present
+                files_data = None
+                if data.get("files"):
+                    files_data = []
+                    for file_obj in data.get("files", []):
+                        try:
+                            filename = file_obj.get("name", "unknown")
+                            mime_type = file_obj.get("mime_type", "")
+                            content_base64 = file_obj.get("content", "")
+
+                            # Parse file content
+                            parsed_content = parse_file(filename, mime_type, content_base64)
+
+                            files_data.append({
+                                "name": filename,
+                                "mime_type": mime_type,
+                                "parsed_content": parsed_content,
+                            })
+                        except ValueError as e:
+                            await websocket.send_json({
+                                "type": "error",
+                                "message": f"File parsing error: {str(e)}"
+                            })
+                            return
+                        except Exception as e:
+                            logger.exception(f"Error processing file {file_obj.get('name')}: {e}")
+                            await websocket.send_json({
+                                "type": "error",
+                                "message": f"Failed to process file: {str(e)}"
+                            })
+                            return
+
+                async def stream_response(content: str, images: list[str] | None = None, files: list[dict] | None = None):
                     done_sent = False
                     try:
                         async for event in agent.process_stream(
                             session_id=session_id,
                             user_content=content,
                             images=images,
+                            files=files,
                         ):
                             await websocket.send_json(event)
                             if event.get("type") == "done":
@@ -70,7 +104,7 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
                             pass
 
                 current_task = asyncio.create_task(
-                    stream_response(data["content"], data.get("images"))
+                    stream_response(data["content"], data.get("images"), files_data)
                 )
 
     except WebSocketDisconnect:

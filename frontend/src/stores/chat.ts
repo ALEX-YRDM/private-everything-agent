@@ -13,11 +13,18 @@ export interface SubAgentState {
   error?: string
 }
 
+export interface FileAttachment {
+  name: string
+  mime_type: string
+  parsed_content?: string
+}
+
 export interface DisplayMessage {
   id: string
   role: 'user' | 'assistant' | 'tool'
   content: string
   images?: string[]          // base64 data URL 图片列表（用户消息附图）
+  files?: FileAttachment[]   // 文件附件列表
   reasoning?: string
   toolCalls?: ToolCallDisplay[]
   toolResults?: Record<string, string>
@@ -175,6 +182,8 @@ export const useChatStore = defineStore('chat', () => {
         flushAssistant()
         let textContent = m.content || ''
         let images: string[] | undefined
+        let files: FileAttachment[] | undefined
+
         if (textContent.startsWith('[')) {
           try {
             const parts = JSON.parse(textContent) as Array<{ type: string; text?: string; image_url?: { url: string } }>
@@ -183,11 +192,20 @@ export const useChatStore = defineStore('chat', () => {
             if (!images.length) images = undefined
           } catch {}
         }
+
+        if (m.files) {
+          try {
+            files = JSON.parse(m.files) as FileAttachment[]
+            if (!files.length) files = undefined
+          } catch {}
+        }
+
         result.push({
           id: `msg-${m.id}`,
           role: 'user',
           content: textContent,
           images,
+          files,
           timestamp: new Date(m.created_at).getTime(),
         })
       } else if (m.role === 'assistant') {
@@ -464,7 +482,7 @@ export const useChatStore = defineStore('chat', () => {
     }
   }
 
-  async function sendMessage(content: string, images?: string[]) {
+  async function sendMessage(content: string, images?: string[], files?: Array<{name: string; mime_type: string; content: string}>) {
     const sessionId = currentSessionId.value
     if (!sessionId) return
 
@@ -476,6 +494,7 @@ export const useChatStore = defineStore('chat', () => {
       role: 'user',
       content,
       images: images?.length ? images : undefined,
+      files: files?.length ? files : undefined,
       timestamp: Date.now(),
     })
 
@@ -494,7 +513,7 @@ export const useChatStore = defineStore('chat', () => {
         }
       )
     }
-    ws.sendMessage(content, images)
+    ws.sendMessage(content, images, files)
   }
 
   function stopStreaming() {
