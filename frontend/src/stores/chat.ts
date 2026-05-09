@@ -17,6 +17,7 @@ export interface FileAttachment {
   name: string
   mime_type: string
   parsed_content?: string
+  size?: number
 }
 
 export interface DisplayMessage {
@@ -482,7 +483,7 @@ export const useChatStore = defineStore('chat', () => {
     }
   }
 
-  async function sendMessage(content: string, images?: string[], files?: Array<{name: string; mime_type: string; content: string}>) {
+  async function sendMessage(content: string, images?: string[], files?: Array<{name: string; mime_type: string; content: string; size?: number}>) {
     const sessionId = currentSessionId.value
     if (!sessionId) return
 
@@ -494,7 +495,7 @@ export const useChatStore = defineStore('chat', () => {
       role: 'user',
       content,
       images: images?.length ? images : undefined,
-      files: files?.length ? files : undefined,
+      files: files?.length ? files.map(f => ({ name: f.name, mime_type: f.mime_type, size: f.size })) : undefined,
       timestamp: Date.now(),
     })
 

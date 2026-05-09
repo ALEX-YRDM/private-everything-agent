@@ -55,15 +55,19 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
                             filename = file_obj.get("name", "unknown")
                             mime_type = file_obj.get("mime_type", "")
                             content_base64 = file_obj.get("content", "")
+                            size = file_obj.get("size")
 
                             # Parse file content
                             parsed_content = parse_file(filename, mime_type, content_base64)
 
-                            files_data.append({
+                            file_record: dict = {
                                 "name": filename,
                                 "mime_type": mime_type,
                                 "parsed_content": parsed_content,
-                            })
+                            }
+                            if size is not None:
+                                file_record["size"] = size
+                            files_data.append(file_record)
                         except ValueError as e:
                             await websocket.send_json({
                                 "type": "error",

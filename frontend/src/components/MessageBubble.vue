@@ -11,6 +11,8 @@ const props = defineProps<{ message: DisplayMessage }>()
 const msg = useMessage()
 
 const previewImage = ref<string | null>(null)
+const userCopied = ref(false)
+const assistantCopied = ref(false)
 
 const formattedTime = computed(() => {
   return new Date(props.message.timestamp).toLocaleTimeString('zh-CN', {
@@ -21,11 +23,22 @@ const formattedTime = computed(() => {
 
 const renderedContent = computed(() => renderMarkdown(props.message.content))
 
+function formatFileSize(bytes?: number): string {
+  if (bytes == null) return ''
+  if (bytes < 1024) return `${bytes} B`
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
+  return `${(bytes / 1024 / 1024).toFixed(2)} MB`
+}
+
 async function copyUserMessage() {
   await copyToClipboard(
     props.message.content,
     undefined,
-    () => msg.success('已复制到剪切板'),
+    () => {
+      msg.success('已复制到剪切板')
+      userCopied.value = true
+      setTimeout(() => { userCopied.value = false }, 1200)
+    },
     (error) => msg.error(`复制失败: ${error.message}`)
   )
 }
@@ -37,7 +50,29 @@ async function copyAssistantMessage() {
   await copyToClipboard(
     plainText,
     html,
-    () => msg.success('已复制到剪切板'),
+    () => {
+      msg.success('已复制到剪切板')
+      assistantCopied.value = true
+      setTimeout(() => { assistantCopied.value = false }, 1200)
+    },
+    (error) => msg.error(`复制失败: ${error.message}`)
+  )
+}
+
+async function handleMarkdownClick(e: MouseEvent) {
+  const target = e.target as HTMLElement
+  const btn = target.closest('.code-copy-btn') as HTMLButtonElement | null
+  if (!btn) return
+  const wrapper = btn.closest('.code-block-wrapper')
+  const code = wrapper?.querySelector('code')?.textContent ?? ''
+  await copyToClipboard(
+    code,
+    undefined,
+    () => {
+      msg.success('代码已复制')
+      btn.classList.add('copied')
+      setTimeout(() => btn.classList.remove('copied'), 1200)
+    },
     (error) => msg.error(`复制失败: ${error.message}`)
   )
 }
@@ -58,12 +93,20 @@ async function copyAssistantMessage() {
         </div>
         <div v-if="message.files?.length" class="user-files">
           <div v-for="(file, idx) in message.files" :key="idx" class="file-item">
-            📎 {{ file.name }}
+            <span class="file-icon">📎</span>
+            <span class="file-name-text">{{ file.name }}</span>
+            <span v-if="file.size != null" class="file-size">{{ formatFileSize(file.size) }}</span>
           </div>
         </div>
         <div class="user-content-wrapper">
           <div class="user-content">{{ message.content }}</div>
-          <button class="copy-btn" @click="copyUserMessage" title="复制到剪切板">📋</button>
+          <button
+            class="copy-btn"
+            :class="{ copied: userCopied }"
+            type="button"
+            @click="copyUserMessage"
+            :title="userCopied ? '已复制' : '复制到剪切板'"
+          >{{ userCopied ? '✅' : '📋' }}</button>
         </div>
       </template>
 
@@ -79,8 +122,15 @@ async function copyAssistantMessage() {
           <div
             class="markdown-content"
             v-html="renderedContent"
+            @click="handleMarkdownClick"
           />
-          <button class="copy-btn" @click="copyAssistantMessage" title="复制到剪切板">📋</button>
+          <button
+            class="copy-btn"
+            :class="{ copied: assistantCopied }"
+            type="button"
+            @click="copyAssistantMessage"
+            :title="assistantCopied ? '已复制' : '复制到剪切板'"
+          >{{ assistantCopied ? '✅' : '📋' }}</button>
         </div>
         <span v-if="message.isStreaming" class="cursor-blink">▋</span>
       </template>
@@ -176,6 +226,14 @@ async function copyAssistantMessage() {
   background: rgba(0, 0, 0, 0.1);
 }
 
+.copy-btn.copied {
+  opacity: 1;
+}
+
+@media (hover: none) and (pointer: coarse) {
+  .copy-btn { opacity: 0.85; }
+}
+
 .user-images {
   display: flex;
   flex-wrap: wrap;
@@ -197,6 +255,24 @@ async function copyAssistantMessage() {
   font-size: 12px;
   color: rgba(255, 255, 255, 0.9);
   word-break: break-all;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.file-icon {
+  flex-shrink: 0;
+}
+
+.file-name-text {
+  flex: 1;
+  min-width: 0;
+}
+
+.file-size {
+  flex-shrink: 0;
+  font-size: 11px;
+  color: rgba(255, 255, 255, 0.65);
 }
 
 .user-image-thumb {
@@ -288,12 +364,50 @@ async function copyAssistantMessage() {
   font-size: 12px;
 }
 
+.markdown-content .code-block-wrapper {
+  position: relative;
+  margin: 8px 0;
+}
+
 .markdown-content .code-block {
   background: #1e1e1e;
   border-radius: 8px;
   padding: 12px;
-  margin: 8px 0;
+  margin: 0;
   overflow-x: auto;
+}
+
+.markdown-content .code-copy-btn {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  background: rgba(255, 255, 255, 0.08);
+  color: #d4d4d4;
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  border-radius: 4px;
+  padding: 2px 6px;
+  font-size: 12px;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.2s, background 0.2s;
+}
+
+.markdown-content .code-block-wrapper:hover .code-copy-btn {
+  opacity: 1;
+}
+
+.markdown-content .code-copy-btn:hover {
+  background: rgba(255, 255, 255, 0.18);
+}
+
+.markdown-content .code-copy-btn.copied {
+  background: rgba(82, 196, 26, 0.35);
+  border-color: rgba(82, 196, 26, 0.6);
+  color: #fff;
+}
+
+@media (hover: none) and (pointer: coarse) {
+  .markdown-content .code-copy-btn { opacity: 1; }
 }
 
 .markdown-content .code-block code {

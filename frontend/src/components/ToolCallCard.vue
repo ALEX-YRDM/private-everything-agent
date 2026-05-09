@@ -1,11 +1,30 @@
 <script setup lang="ts">
 import { ref, computed } from 'vue'
+import { useMessage } from 'naive-ui'
+import { copyToClipboard } from '../utils/clipboard'
 import type { ToolCallDisplay } from '../stores/chat'
 
 const props = defineProps<{
   toolCall: ToolCallDisplay
   result?: string
 }>()
+
+const msg = useMessage()
+const justCopied = ref(false)
+
+async function copyResult() {
+  if (props.result === undefined) return
+  await copyToClipboard(
+    props.result,
+    undefined,
+    () => {
+      msg.success('结果已复制')
+      justCopied.value = true
+      setTimeout(() => { justCopied.value = false }, 1200)
+    },
+    (error) => msg.error(`复制失败: ${error.message}`)
+  )
+}
 
 const expanded = ref(false)
 
@@ -53,7 +72,16 @@ const icon = computed(() => {
         <pre v-else>{{ JSON.stringify(toolCall.args, null, 2) }}</pre>
       </div>
       <div v-if="result !== undefined" class="tool-result">
-        <div class="section-label">结果</div>
+        <div class="result-header">
+          <div class="section-label">结果</div>
+          <button
+            class="copy-result-btn"
+            :class="{ copied: justCopied }"
+            type="button"
+            title="复制结果"
+            @click="copyResult"
+          >📋</button>
+        </div>
         <pre>{{ result }}</pre>
       </div>
     </div>
@@ -146,6 +174,45 @@ const icon = computed(() => {
   text-transform: uppercase;
   letter-spacing: 0.5px;
   margin-bottom: 4px;
+}
+
+.result-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.copy-result-btn {
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  padding: 1px 5px;
+  font-size: 12px;
+  color: #888;
+  cursor: pointer;
+  opacity: 0.55;
+  transition: opacity 0.2s, background 0.2s, color 0.2s, border-color 0.2s;
+}
+
+.tool-result:hover .copy-result-btn {
+  opacity: 1;
+}
+
+.copy-result-btn:hover {
+  background: #f0f0f0;
+  color: #333;
+}
+
+.copy-result-btn.copied {
+  background: #f6ffed;
+  color: #52c41a;
+  border-color: #b7eb8f;
+  opacity: 1;
+}
+
+@media (hover: none) and (pointer: coarse) {
+  .copy-result-btn { opacity: 1; }
 }
 
 pre {

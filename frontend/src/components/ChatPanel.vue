@@ -190,7 +190,8 @@ async function sendMessage() {
   const files = attachedFiles.value.length ? attachedFiles.value.map(f => ({
     name: f.name,
     mime_type: getMimeType(f.name),
-    content: f.content.split(',')[1] || f.content  // 提取 base64 部分
+    content: f.content.split(',')[1] || f.content,  // 提取 base64 部分
+    size: f.size,
   })) : undefined
   inputText.value = ''
   attachedImages.value = []
