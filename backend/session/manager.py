@@ -72,7 +72,7 @@ class SessionManager:
         只返回未被整合的消息，并确保从 user turn 开始对齐。
         """
         messages = await self.db.fetch_all(
-            """SELECT role, content, tool_calls, tool_call_id, tool_name
+            """SELECT role, content, tool_calls, tool_call_id, tool_name, files
                FROM messages
                WHERE session_id = ? AND is_consolidated = 0
                ORDER BY id ASC
@@ -103,6 +103,32 @@ class SessionManager:
                 if m["tool_call_id"]:
                     msg["tool_call_id"] = m["tool_call_id"]
                     msg["name"] = m["tool_name"]
+                # 恢复文件信息：从历史消息中重新注入文件内容到上下文
+                if m.get("files"):
+                    try:
+                        files = json.loads(m["files"])
+                        if files and msg["role"] == "user":
+                            # 将文件内容追加到消息内容中
+                            file_content_lines = []
+                            for file_obj in files:
+                                file_name = file_obj.get("name", "unknown")
+                                file_text = file_obj.get("parsed_content", "")
+                                file_content_lines.append(f"[File: {file_name}]\n{file_text}")
+
+                            if file_content_lines:
+                                file_section = "\n\n".join(file_content_lines)
+                                # 如果content已经是list（多模态），追加到text部分
+                                if isinstance(msg["content"], list):
+                                    # 查找text部分并追加
+                                    for part in msg["content"]:
+                                        if part.get("type") == "text":
+                                            part["text"] = part.get("text", "") + f"\n\n{file_section}"
+                                            break
+                                else:
+                                    # 纯文本，直接追加
+                                    msg["content"] = f"{msg['content']}\n\n{file_section}"
+                    except Exception:
+                        pass
                 result.append(msg)
         return result
 
