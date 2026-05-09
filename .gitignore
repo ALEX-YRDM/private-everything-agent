@@ -32,3 +32,4 @@ workspace
 skills/*
 .claude
 .joycode
+logs

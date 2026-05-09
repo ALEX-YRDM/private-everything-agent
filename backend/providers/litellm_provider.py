@@ -1,7 +1,9 @@
 import litellm
 import json
+import time
 from loguru import logger
 from .base import LLMProvider, LLMResponse, StreamEvent, ToolCallRequest
+from ..utils.llm_logger import log_llm_call
 
 litellm.set_verbose = False
 
@@ -69,8 +71,25 @@ class LiteLLMProvider(LLMProvider):
         if tools:
             kw["tools"] = tools
 
-        response = await litellm.acompletion(**kw)
-        return self._parse_response(response)
+        start = time.perf_counter()
+        try:
+            response = await litellm.acompletion(**kw)
+            log_llm_call(
+                request=kw,
+                response=response,
+                duration_ms=(time.perf_counter() - start) * 1000,
+                stream=False,
+            )
+            return self._parse_response(response)
+        except Exception as e:
+            log_llm_call(
+                request=kw,
+                response=None,
+                duration_ms=(time.perf_counter() - start) * 1000,
+                stream=False,
+                error=f"{type(e).__name__}: {e}",
+            )
+            raise
 
     async def chat_stream(self, messages, tools=None, model="gpt-4o", **kwargs):
         """
@@ -92,87 +111,131 @@ class LiteLLMProvider(LLMProvider):
         finish_reason_seen: str | None = None
         pending_tool_calls_data: dict | None = None
 
-        async for chunk in await litellm.acompletion(**kw):
-            delta = chunk.choices[0].delta
-            finish_reason = chunk.choices[0].finish_reason
+        start = time.perf_counter()
+        log_error: str | None = None
 
-            # 捕获 usage（部分 provider 在 finish_reason chunk 携带，部分在独立末尾 chunk）
-            chunk_usage = getattr(chunk, "usage", None)
-            if chunk_usage is not None:
-                pt = getattr(chunk_usage, "prompt_tokens", None)
-                ct = getattr(chunk_usage, "completion_tokens", None)
-                if pt is not None or ct is not None:
-                    accumulated_usage = {
-                        "input_tokens": pt or 0,
-                        "output_tokens": ct or 0,
+        try:
+            async for chunk in await litellm.acompletion(**kw):
+                delta = chunk.choices[0].delta
+                finish_reason = chunk.choices[0].finish_reason
+
+                # 捕获 usage（部分 provider 在 finish_reason chunk 携带，部分在独立末尾 chunk）
+                chunk_usage = getattr(chunk, "usage", None)
+                if chunk_usage is not None:
+                    pt = getattr(chunk_usage, "prompt_tokens", None)
+                    ct = getattr(chunk_usage, "completion_tokens", None)
+                    if pt is not None or ct is not None:
+                        accumulated_usage = {
+                            "input_tokens": pt or 0,
+                            "output_tokens": ct or 0,
+                        }
+
+                if delta.content:
+                    accumulated_content += delta.content
+                    yield StreamEvent(type="content_delta", content=delta.content)
+
+                # 思维链（DeepSeek R1 等）
+                reasoning = getattr(delta, "reasoning_content", None)
+                if reasoning:
+                    accumulated_reasoning += reasoning
+                    yield StreamEvent(type="thinking", content=reasoning)
+
+                if delta.tool_calls:
+                    for tc_delta in delta.tool_calls:
+                        idx = tc_delta.index
+                        if idx not in accumulated_tool_calls:
+                            accumulated_tool_calls[idx] = {"id": "", "name": "", "arguments": "", "_emitted": False}
+                        if tc_delta.id:
+                            accumulated_tool_calls[idx]["id"] = tc_delta.id
+                        if tc_delta.function and tc_delta.function.name:
+                            accumulated_tool_calls[idx]["name"] = tc_delta.function.name
+                        if tc_delta.function and tc_delta.function.arguments:
+                            accumulated_tool_calls[idx]["arguments"] += tc_delta.function.arguments
+
+                        tc_acc = accumulated_tool_calls[idx]
+                        if not tc_acc["_emitted"] and tc_acc["id"] and tc_acc["name"]:
+                            tc_acc["_emitted"] = True
+                            yield StreamEvent(
+                                type="tool_call",
+                                data={"id": tc_acc["id"], "name": tc_acc["name"], "args": {}},
+                            )
+                        if tc_delta.function and tc_delta.function.arguments and tc_acc["id"]:
+                            yield StreamEvent(
+                                type="tool_call_delta",
+                                data={"id": tc_acc["id"], "args_delta": tc_delta.function.arguments},
+                            )
+
+                if finish_reason == "tool_calls":
+                    finish_reason_seen = "tool_calls"
+                    tool_calls = []
+                    for tc in accumulated_tool_calls.values():
+                        try:
+                            args = json.loads(tc["arguments"]) if tc["arguments"] else {}
+                        except json.JSONDecodeError:
+                            args = {}
+                        tool_calls.append(ToolCallRequest(id=tc["id"], name=tc["name"], arguments=args))
+                    pending_tool_calls_data = {
+                        "content": accumulated_content,
+                        "reasoning_content": accumulated_reasoning or None,
+                        "tool_calls": [
+                            {"id": t.id, "name": t.name, "arguments": t.arguments}
+                            for t in tool_calls
+                        ],
                     }
+                elif finish_reason == "stop":
+                    finish_reason_seen = "stop"
 
-            if delta.content:
-                accumulated_content += delta.content
-                yield StreamEvent(type="content_delta", content=delta.content)
+            # 循环结束后：先 yield usage（如有），再 yield 终止事件
+            if accumulated_usage:
+                yield StreamEvent(type="usage", data=accumulated_usage)
 
-            # 思维链（DeepSeek R1 等）
-            reasoning = getattr(delta, "reasoning_content", None)
-            if reasoning:
-                accumulated_reasoning += reasoning
-                yield StreamEvent(type="thinking", content=reasoning)
-
-            if delta.tool_calls:
-                for tc_delta in delta.tool_calls:
-                    idx = tc_delta.index
-                    if idx not in accumulated_tool_calls:
-                        accumulated_tool_calls[idx] = {"id": "", "name": "", "arguments": "", "_emitted": False}
-                    if tc_delta.id:
-                        accumulated_tool_calls[idx]["id"] = tc_delta.id
-                    if tc_delta.function and tc_delta.function.name:
-                        accumulated_tool_calls[idx]["name"] = tc_delta.function.name
-                    if tc_delta.function and tc_delta.function.arguments:
-                        accumulated_tool_calls[idx]["arguments"] += tc_delta.function.arguments
-
-                    tc_acc = accumulated_tool_calls[idx]
-                    if not tc_acc["_emitted"] and tc_acc["id"] and tc_acc["name"]:
-                        tc_acc["_emitted"] = True
-                        yield StreamEvent(
-                            type="tool_call",
-                            data={"id": tc_acc["id"], "name": tc_acc["name"], "args": {}},
-                        )
-                    if tc_delta.function and tc_delta.function.arguments and tc_acc["id"]:
-                        yield StreamEvent(
-                            type="tool_call_delta",
-                            data={"id": tc_acc["id"], "args_delta": tc_delta.function.arguments},
-                        )
-
-            if finish_reason == "tool_calls":
-                finish_reason_seen = "tool_calls"
-                tool_calls = []
-                for tc in accumulated_tool_calls.values():
-                    try:
-                        args = json.loads(tc["arguments"]) if tc["arguments"] else {}
-                    except json.JSONDecodeError:
-                        args = {}
-                    tool_calls.append(ToolCallRequest(id=tc["id"], name=tc["name"], arguments=args))
-                pending_tool_calls_data = {
-                    "content": accumulated_content,
-                    "reasoning_content": accumulated_reasoning or None,
-                    "tool_calls": [
-                        {"id": t.id, "name": t.name, "arguments": t.arguments}
-                        for t in tool_calls
-                    ],
-                }
-            elif finish_reason == "stop":
-                finish_reason_seen = "stop"
-
-        # 循环结束后：先 yield usage（如有），再 yield 终止事件
-        if accumulated_usage:
-            yield StreamEvent(type="usage", data=accumulated_usage)
-
-        if finish_reason_seen == "tool_calls" and pending_tool_calls_data:
-            yield StreamEvent(type="tool_calls_ready", data=pending_tool_calls_data)
-        elif finish_reason_seen == "stop":
-            yield StreamEvent(
-                type="done",
-                content=accumulated_content,
-                data={"reasoning_content": accumulated_reasoning} if accumulated_reasoning else None,
+            if finish_reason_seen == "tool_calls" and pending_tool_calls_data:
+                yield StreamEvent(type="tool_calls_ready", data=pending_tool_calls_data)
+            elif finish_reason_seen == "stop":
+                yield StreamEvent(
+                    type="done",
+                    content=accumulated_content,
+                    data={"reasoning_content": accumulated_reasoning} if accumulated_reasoning else None,
+                )
+        except Exception as e:
+            log_error = f"{type(e).__name__}: {e}"
+            raise
+        finally:
+            # 聚合为类 OpenAI 响应 schema，便于离线复盘
+            message_obj: dict = {"role": "assistant", "content": accumulated_content or None}
+            if accumulated_reasoning:
+                message_obj["reasoning_content"] = accumulated_reasoning
+            if pending_tool_calls_data and pending_tool_calls_data.get("tool_calls"):
+                message_obj["tool_calls"] = [
+                    {
+                        "id": tc["id"],
+                        "type": "function",
+                        "function": {
+                            "name": tc["name"],
+                            "arguments": json.dumps(tc["arguments"], ensure_ascii=False),
+                        },
+                    }
+                    for tc in pending_tool_calls_data["tool_calls"]
+                ]
+            aggregated_response = {
+                "choices": [{
+                    "message": message_obj,
+                    "finish_reason": finish_reason_seen,
+                }],
+                "usage": (
+                    {
+                        "prompt_tokens": accumulated_usage["input_tokens"],
+                        "completion_tokens": accumulated_usage["output_tokens"],
+                    }
+                    if accumulated_usage else None
+                ),
+            }
+            log_llm_call(
+                request=kw,
+                response=aggregated_response,
+                duration_ms=(time.perf_counter() - start) * 1000,
+                stream=True,
+                error=log_error,
             )
 
     def _parse_response(self, response) -> LLMResponse:
