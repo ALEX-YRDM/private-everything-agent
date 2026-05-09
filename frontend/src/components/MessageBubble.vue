@@ -98,16 +98,7 @@ async function handleMarkdownClick(e: MouseEvent) {
             <span v-if="file.size != null" class="file-size">{{ formatFileSize(file.size) }}</span>
           </div>
         </div>
-        <div class="user-content-wrapper">
-          <div class="user-content">{{ message.content }}</div>
-          <button
-            class="copy-btn"
-            :class="{ copied: userCopied }"
-            type="button"
-            @click="copyUserMessage"
-            :title="userCopied ? '已复制' : '复制到剪切板'"
-          >{{ userCopied ? '✅' : '📋' }}</button>
-        </div>
+        <div class="user-content">{{ message.content }}</div>
       </template>
 
       <template v-else-if="message.role === 'assistant'">
@@ -118,29 +109,37 @@ async function handleMarkdownClick(e: MouseEvent) {
           :tool-call="tc"
           :result="message.toolResults?.[tc.id]"
         />
-        <div v-if="message.content" class="assistant-content-wrapper">
-          <div
-            class="markdown-content"
-            v-html="renderedContent"
-            @click="handleMarkdownClick"
-          />
-          <button
-            class="copy-btn"
-            :class="{ copied: assistantCopied }"
-            type="button"
-            @click="copyAssistantMessage"
-            :title="assistantCopied ? '已复制' : '复制到剪切板'"
-          >{{ assistantCopied ? '✅' : '📋' }}</button>
-        </div>
+        <div
+          v-if="message.content"
+          class="markdown-content"
+          v-html="renderedContent"
+          @click="handleMarkdownClick"
+        />
         <span v-if="message.isStreaming" class="cursor-blink">▋</span>
       </template>
     </div>
     <div class="message-meta">
+      <button
+        v-if="message.role === 'user' && message.content"
+        class="copy-btn"
+        :class="{ copied: userCopied }"
+        type="button"
+        @click="copyUserMessage"
+        :title="userCopied ? '已复制' : '复制到剪切板'"
+      >{{ userCopied ? '✅' : '📋' }}</button>
       <span class="message-time">{{ formattedTime }}</span>
       <span
         v-if="message.role === 'assistant' && (message.inputTokens != null || message.outputTokens != null)"
         class="token-info"
       >· ↑{{ message.inputTokens?.toLocaleString() ?? '—' }} ↓{{ message.outputTokens?.toLocaleString() ?? '—' }}</span>
+      <button
+        v-if="message.role === 'assistant' && message.content"
+        class="copy-btn"
+        :class="{ copied: assistantCopied }"
+        type="button"
+        @click="copyAssistantMessage"
+        :title="assistantCopied ? '已复制' : '复制到剪切板'"
+      >{{ assistantCopied ? '✅' : '📋' }}</button>
     </div>
   </div>
 
@@ -187,51 +186,36 @@ async function handleMarkdownClick(e: MouseEvent) {
   min-width: 100px;
 }
 
-.user-content-wrapper {
-  position: relative;
-  display: inline-block;
-  width: 100%;
-}
-
-.user-content-wrapper:hover .copy-btn,
-.assistant-content-wrapper:hover .copy-btn {
-  opacity: 1;
-}
-
 .user-content {
   white-space: pre-wrap;
   font-size: 14px;
   line-height: 1.6;
 }
 
-.assistant-content-wrapper {
-  position: relative;
-}
-
 .copy-btn {
-  position: absolute;
-  top: 4px;
-  right: 4px;
   background: transparent;
   border: none;
   cursor: pointer;
   opacity: 0;
-  transition: opacity 0.2s;
-  font-size: 14px;
-  padding: 4px;
+  transition: opacity 0.2s, background 0.2s;
+  font-size: 12px;
+  padding: 1px 5px;
   border-radius: 4px;
+  line-height: 1;
+}
+
+.message-wrapper:hover .copy-btn,
+.copy-btn.copied {
+  opacity: 0.7;
 }
 
 .copy-btn:hover {
-  background: rgba(0, 0, 0, 0.1);
-}
-
-.copy-btn.copied {
-  opacity: 1;
+  background: rgba(0, 0, 0, 0.08);
+  opacity: 1 !important;
 }
 
 @media (hover: none) and (pointer: coarse) {
-  .copy-btn { opacity: 0.85; }
+  .copy-btn { opacity: 0.7; }
 }
 
 .user-images {
