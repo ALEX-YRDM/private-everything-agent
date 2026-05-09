@@ -1,5 +1,4 @@
 from pathlib import Path
-from datetime import datetime
 from .skills import SkillsLoader
 from .memory import MemoryManager
 
@@ -49,7 +48,13 @@ class ContextBuilder:
         if skills_summary:
             parts.append(skills_summary)
 
-        return "\n\n---\n\n".join(parts)
+        base_prompt = "\n\n---\n\n".join(parts)
+
+        # 添加会话级固定时间戳，用于缓存一致性
+        session_date = await self._get_or_create_session_date(session_id)
+        base_prompt = f"当前日期：{session_date}\n\n---\n\n{base_prompt}"
+
+        return base_prompt
 
     async def _get_session_summary(self, session_id: str) -> str:
         """读取会话级 AutoCompact 摘要。"""
@@ -57,6 +62,30 @@ class ContextBuilder:
             return ""
         row = await self.db.fetch_one("SELECT summary FROM sessions WHERE id = ?", (session_id,))
         return (row or {}).get("summary") or ""
+
+    async def _get_or_create_session_date(self, session_id: str) -> str:
+        """获取或创建会话级日期（用于缓存一致性）。"""
+        if not self.db:
+            from datetime import datetime
+            now = datetime.now()
+            weekdays = ["周一", "周二", "周三", "周四", "周五", "周六", "周日"]
+            return f"{now.strftime('%Y-%m-%d')}（{weekdays[now.weekday()]}）"
+
+        row = await self.db.fetch_one("SELECT session_date FROM sessions WHERE id = ?", (session_id,))
+        session_date = (row or {}).get("session_date")
+
+        if not session_date:
+            # 首次访问，生成并保存会话日期
+            from datetime import datetime
+            now = datetime.now()
+            weekdays = ["周一", "周二", "周三", "周四", "周五", "周六", "周日"]
+            session_date = f"{now.strftime('%Y-%m-%d')}（{weekdays[now.weekday()]}）"
+            await self.db.execute(
+                "UPDATE sessions SET session_date = ? WHERE id = ?",
+                (session_date, session_id)
+            )
+
+        return session_date
 
     async def build_messages(
         self,
@@ -69,12 +98,8 @@ class ContextBuilder:
         """组合完整消息列表：system + 历史 + 当前消息。"""
         system_prompt = await self.build_system_prompt(session_id)
 
-        now = datetime.now()
-        weekdays = ["周一", "周二", "周三", "周四", "周五", "周六", "周日"]
-        runtime = f"当前时间：{now.strftime('%Y-%m-%d')}（{weekdays[now.weekday()]}）"
-
-        # 构建完整的用户消息内容，包括文件
-        full_content = f"{runtime}\n\n{user_content}"
+        # 构建完整的用户消息内容，包括文件（不包含时间戳以保持缓存一致性）
+        full_content = user_content
         if files:
             for file_obj in files:
                 file_name = file_obj.get("name", "unknown")
@@ -112,10 +137,6 @@ class ContextBuilder:
         为 SubAgent 构建精简的消息列表。
         SubAgent 专注于单一子任务，不需要完整的身份/记忆/Skills 上下文。
         """
-        now = datetime.now()
-        weekdays = ["周一", "周二", "周三", "周四", "周五", "周六", "周日"]
-        runtime = f"当前时间：{now.strftime('%Y-%m-%d %H:%M:%S')}（{weekdays[now.weekday()]}）"
-
         system = (
             "你是一个专注的子代理（SubAgent），负责高效完成指定的子任务。\n\n"
             "## 工作原则\n"
@@ -127,7 +148,7 @@ class ContextBuilder:
         )
         return [
             {"role": "system", "content": system},
-            {"role": "user", "content": f"{runtime}\n\n{task}"},
+            {"role": "user", "content": task},
         ]
 
     def _operational_rules(self) -> str:

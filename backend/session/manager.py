@@ -103,32 +103,6 @@ class SessionManager:
                 if m["tool_call_id"]:
                     msg["tool_call_id"] = m["tool_call_id"]
                     msg["name"] = m["tool_name"]
-                # 恢复文件信息：从历史消息中重新注入文件内容到上下文
-                if m.get("files"):
-                    try:
-                        files = json.loads(m["files"])
-                        if files and msg["role"] == "user":
-                            # 将文件内容追加到消息内容中
-                            file_content_lines = []
-                            for file_obj in files:
-                                file_name = file_obj.get("name", "unknown")
-                                file_text = file_obj.get("parsed_content", "")
-                                file_content_lines.append(f"[File: {file_name}]\n{file_text}")
-
-                            if file_content_lines:
-                                file_section = "\n\n".join(file_content_lines)
-                                # 如果content已经是list（多模态），追加到text部分
-                                if isinstance(msg["content"], list):
-                                    # 查找text部分并追加
-                                    for part in msg["content"]:
-                                        if part.get("type") == "text":
-                                            part["text"] = part.get("text", "") + f"\n\n{file_section}"
-                                            break
-                                else:
-                                    # 纯文本，直接追加
-                                    msg["content"] = f"{msg['content']}\n\n{file_section}"
-                    except Exception:
-                        pass
                 result.append(msg)
         return result
 
@@ -153,13 +127,35 @@ class SessionManager:
         statements: list[tuple[str, tuple]] = []
 
         # 用户消息：有图片时 content 存为 JSON 多模态数组，否则纯文本
+        # 同时将文件内容合并到消息中，以便缓存命中
         if images:
             parts = [{"type": "text", "text": user_content}]
+            # 追加文件内容到文本部分
+            if files:
+                file_content_lines = []
+                for file_obj in files:
+                    file_name = file_obj.get("name", "unknown")
+                    file_text = file_obj.get("parsed_content", "")
+                    file_content_lines.append(f"[File: {file_name}]\n{file_text}")
+                if file_content_lines:
+                    file_section = "\n\n".join(file_content_lines)
+                    parts[0]["text"] = parts[0]["text"] + f"\n\n{file_section}"
+
             for img in images:
                 parts.append({"type": "image_url", "image_url": {"url": img}})
             user_content_db = json.dumps(parts, ensure_ascii=False)
         else:
+            # 纯文本消息
             user_content_db = user_content
+            if files:
+                file_content_lines = []
+                for file_obj in files:
+                    file_name = file_obj.get("name", "unknown")
+                    file_text = file_obj.get("parsed_content", "")
+                    file_content_lines.append(f"[File: {file_name}]\n{file_text}")
+                if file_content_lines:
+                    file_section = "\n\n".join(file_content_lines)
+                    user_content_db = f"{user_content_db}\n\n{file_section}"
 
         files_db = json.dumps(files, ensure_ascii=False) if files else None
 
