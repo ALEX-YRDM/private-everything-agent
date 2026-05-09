@@ -4,14 +4,13 @@ import { useMessage } from 'naive-ui'
 import ThinkingBlock from './ThinkingBlock.vue'
 import ToolCallCard from './ToolCallCard.vue'
 import { renderMarkdown } from '../utils/markdown'
-import { copyToClipboard, htmlToPlainText } from '../utils/clipboard'
+import { copyToClipboard } from '../utils/clipboard'
 import type { DisplayMessage } from '../stores/chat'
 
 const props = defineProps<{ message: DisplayMessage }>()
 const msg = useMessage()
 
 const previewImage = ref<string | null>(null)
-const copiedIndex = ref<number | null>(null)
 
 const formattedTime = computed(() => {
   return new Date(props.message.timestamp).toLocaleTimeString('zh-CN', {

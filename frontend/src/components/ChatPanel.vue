@@ -90,16 +90,13 @@ function onFileInputChange(e: Event) {
 
 function getFileExtension(filename: string): string {
   const parts = filename.split('.')
-  return parts.length > 1 ? parts[parts.length - 1].toLowerCase() : ''
+  if (parts.length > 1) {
+    const ext = parts[parts.length - 1]
+    return ext ? ext.toLowerCase() : ''
+  }
+  return ''
 }
 
-function formatFileSize(bytes: number): string {
-  if (bytes === 0) return '0 B'
-  const k = 1024
-  const sizes = ['B', 'KB', 'MB']
-  const i = Math.floor(Math.log(bytes) / Math.log(k))
-  return Math.round((bytes / Math.pow(k, i)) * 100) / 100 + ' ' + sizes[i]
-}
 
 async function addFiles(files: FileList | File[]) {
   for (const file of Array.from(files)) {
