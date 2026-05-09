@@ -52,7 +52,7 @@ class ContextBuilder:
 
         # 添加会话级固定时间戳，用于缓存一致性
         session_date = await self._get_or_create_session_date(session_id)
-        base_prompt = f"当前日期：{session_date}\n\n---\n\n{base_prompt}"
+        base_prompt = f"{base_prompt}\n\n---当前日期：{session_date}\n\n"
 
         return base_prompt
 
