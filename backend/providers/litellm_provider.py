@@ -199,6 +199,12 @@ class LiteLLMProvider(LLMProvider):
                 )
         except Exception as e:
             log_error = f"{type(e).__name__}: {e}"
+            # 在抛出前先 yield 一个 error 事件，让流式协议对称：
+            # 上层 loop.py 即便不捕获，前端也已经能收到具体错误信息。
+            try:
+                yield StreamEvent(type="error", content=str(e))
+            except Exception:
+                pass
             raise
         finally:
             # 聚合为类 OpenAI 响应 schema，便于离线复盘

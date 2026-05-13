@@ -30,6 +30,10 @@ const TaskNotificationWatcher = defineComponent({
         msg.error(n.message, { duration: 8000 })
       }
     })
+    watch(() => chat.lastError, (e) => {
+      if (!e) return
+      msg.error(`大模型调用失败：${e.message}`, { duration: 8000 })
+    })
     return () => null
   },
 })

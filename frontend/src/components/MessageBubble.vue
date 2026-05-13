@@ -117,6 +117,16 @@ async function handleMarkdownClick(e: MouseEvent) {
         />
         <span v-if="message.isStreaming" class="cursor-blink">▋</span>
       </template>
+
+      <template v-else-if="message.role === 'error'">
+        <div class="error-content">
+          <span class="error-icon">⚠️</span>
+          <div class="error-text">
+            <div class="error-title">大模型调用失败</div>
+            <div class="error-message">{{ message.content }}</div>
+          </div>
+        </div>
+      </template>
     </div>
     <div class="message-meta">
       <button
@@ -164,6 +174,49 @@ async function handleMarkdownClick(e: MouseEvent) {
 
 .message-wrapper.assistant {
   align-items: flex-start;
+}
+
+.message-wrapper.error {
+  align-items: stretch;
+}
+
+.message-bubble.error {
+  max-width: 100%;
+  background: #fff2f0;
+  border: 1px solid #ffccc7;
+  color: #a8071a;
+  border-radius: 8px;
+}
+
+.error-content {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+}
+
+.error-icon {
+  font-size: 18px;
+  line-height: 1.4;
+  flex-shrink: 0;
+}
+
+.error-text {
+  flex: 1;
+  min-width: 0;
+}
+
+.error-title {
+  font-weight: 600;
+  font-size: 13px;
+  margin-bottom: 4px;
+}
+
+.error-message {
+  font-size: 13px;
+  line-height: 1.6;
+  word-break: break-word;
+  white-space: pre-wrap;
+  font-family: 'SF Mono', 'Monaco', 'Cascadia Code', monospace;
 }
 
 .message-bubble {

@@ -22,7 +22,7 @@ export interface FileAttachment {
 
 export interface DisplayMessage {
   id: string
-  role: 'user' | 'assistant' | 'tool'
+  role: 'user' | 'assistant' | 'tool' | 'error'
   content: string
   images?: string[]          // base64 data URL 图片列表（用户消息附图）
   files?: FileAttachment[]   // 文件附件列表
@@ -67,6 +67,8 @@ export const useChatStore = defineStore('chat', () => {
   const tasksChangedAt = ref(0)
   /** 最近一次收到的定时任务广播通知（App.vue 监听并显示 toast）。 */
   const lastTaskNotification = ref<{ task_name: string; status: string; message: string } | null>(null)
+  /** 最近一次 Agent 流式错误（App.vue 监听并弹出 toast）。 */
+  const lastError = ref<{ session_id: string; message: string; at: number } | null>(null)
 
   const currentSession = computed(() =>
     sessions.value.find((s) => s.id === currentSessionId.value) || null
@@ -467,8 +469,33 @@ export const useChatStore = defineStore('chat', () => {
       state.subagentSessionsLoaded = false
       loadSessions()
     } else if (event.type === 'error') {
+      // 1) 如果有正在流式的 assistant 消息，把已生成的内容固化进消息列表
+      if (state.streamingMessage) {
+        state.streamingMessage.isStreaming = false
+        if (
+          state.streamingMessage.content ||
+          (state.streamingMessage.toolCalls?.length ?? 0) > 0 ||
+          (state.streamingMessage.subAgents?.length ?? 0) > 0
+        ) {
+          state.messages.push({ ...state.streamingMessage })
+        }
+        state.streamingMessage = null
+      }
+      // 2) 把错误作为一条 error 消息气泡插入对话流，让用户在历史中看得到
+      state.messages.push({
+        id: `error-${Date.now()}`,
+        role: 'error',
+        content: event.message || '未知错误',
+        timestamp: Date.now(),
+      })
+      state.activeSubAgents.clear()
       state.isStreaming = false
-      state.streamingMessage = null
+      // 3) 触发顶层 toast 通知
+      lastError.value = {
+        session_id: sessionId,
+        message: event.message || '未知错误',
+        at: Date.now(),
+      }
       console.error('Agent 错误:', event.message)
     } else if (event.type === 'session_title') {
       // 用事件携带的 session_id 精确匹配（后台广播场景），fallback 到当前 WS 的 sessionId
@@ -566,6 +593,7 @@ export const useChatStore = defineStore('chat', () => {
     streamingMessage,
     tasksChangedAt,
     lastTaskNotification,
+    lastError,
     init,
     loadSessions,
     createSession,
