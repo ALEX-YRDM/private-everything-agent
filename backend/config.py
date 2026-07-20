@@ -7,7 +7,7 @@ class LLMConfig(BaseSettings):
     default_model: str = "gpt-4o"
     api_key: str | None = None
     api_base: str | None = None
-    max_tokens: int = 4096
+    max_tokens: int = 8192
     temperature: float = 0.1
     reasoning_effort: str | None = None
     context_window_tokens: int = 65536
@@ -20,6 +20,10 @@ class ToolsConfig(BaseSettings):
     brave_api_key: str | None = None
     restrict_to_workspace: bool = True
     shell_timeout: int = 30
+    subagent_concurrency: int = 5
+    confirm_required_tools: list[str] = [
+        "exec", "write_file", "edit_file", "multi_edit", "apply_patch",
+    ]
 
     model_config = {"env_prefix": "TOOLS__", "extra": "ignore"}
 
