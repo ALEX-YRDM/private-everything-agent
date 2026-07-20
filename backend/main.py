@@ -11,6 +11,7 @@ from .agent.loop import AgentLoop
 from .scheduler import AgentScheduler
 from .api.routes import router as api_router
 from .api.websocket import router as ws_router
+from .api.terminal import router as terminal_router
 
 # _DEFAULT_PROVIDERS = [
 #     {
@@ -421,6 +422,7 @@ app.add_middleware(
 
 app.include_router(api_router, prefix="/api")
 app.include_router(ws_router)
+app.include_router(terminal_router, prefix="/api")
 
 # 生产环境：挂载 Vue 构建产物
 frontend_dist = Path(__file__).parent.parent / "frontend" / "dist"
