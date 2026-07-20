@@ -1,7 +1,7 @@
 import { ref, computed } from 'vue'
 import { defineStore } from 'pinia'
 import { api, type Session, type Message } from '../api/http'
-import { AgentWebSocket, type StreamEvent, type SubAgentInnerEvent } from '../api/websocket'
+import { AgentWebSocket, type StreamEvent, type SubAgentInnerEvent, type ConfirmDecision, type ConfirmPreview } from '../api/websocket'
 
 export interface SubAgentState {
   id: string
@@ -11,6 +11,19 @@ export interface SubAgentState {
   events: SubAgentInnerEvent[]
   result?: string
   error?: string
+}
+
+export interface PendingConfirm {
+  id: string             // tool_call_id
+  session_id: string
+  name: string
+  args: Record<string, unknown>
+  cwd: string
+  why: string
+  preview?: ConfirmPreview
+  suggested_trust_path?: string
+  suggested_trust_command?: string
+  ts: number
 }
 
 export interface FileAttachment {
@@ -33,6 +46,8 @@ export interface DisplayMessage {
   isStreaming?: boolean
   inputTokens?: number
   outputTokens?: number
+  errorCategory?: string     // 错误分类（error role 专用）
+  errorHint?: string         // 错误建议（error role 专用）
   timestamp: number
 }
 
@@ -53,6 +68,8 @@ interface SessionState {
   // 已展开的 SubAgent session 列表（用于 SessionList）
   subagentSessions: Session[]
   subagentSessionsLoaded: boolean
+  // 破坏性工具确认请求（tool_call_id → payload）
+  pendingConfirms: Map<string, PendingConfirm>
 }
 
 const TASK_TOOLS = new Set(['create_task', 'delete_task', 'update_task'])
@@ -95,6 +112,7 @@ export const useChatStore = defineStore('chat', () => {
         activeSubAgents: new Map(),
         subagentSessions: [],
         subagentSessionsLoaded: false,
+        pendingConfirms: new Map(),
       }
     }
     return sessionStates.value[sessionId]
@@ -468,6 +486,22 @@ export const useChatStore = defineStore('chat', () => {
       // 重置子会话缓存，使 ⚙ 按钮下次展开时能拉取最新子会话列表
       state.subagentSessionsLoaded = false
       loadSessions()
+    } else if (event.type === 'tool_confirm') {
+      state.pendingConfirms.set(event.id, {
+        id: event.id,
+        session_id: sessionId,
+        name: event.name,
+        args: event.args,
+        cwd: event.cwd,
+        why: event.why,
+        preview: event.preview,
+        suggested_trust_path: event.suggested_trust_path,
+        suggested_trust_command: event.suggested_trust_command,
+        ts: Date.now(),
+      })
+    } else if (event.type === 'tool_denied') {
+      state.pendingConfirms.delete(event.id)
+      // 标记流式消息中对应工具调用为拒绝状态（tool_result 会紧跟着到，直接由现有逻辑写入结果）
     } else if (event.type === 'error') {
       // 1) 如果有正在流式的 assistant 消息，把已生成的内容固化进消息列表
       if (state.streamingMessage) {
@@ -486,17 +520,21 @@ export const useChatStore = defineStore('chat', () => {
         id: `error-${Date.now()}`,
         role: 'error',
         content: event.message || '未知错误',
+        errorCategory: event.category,
+        errorHint: event.hint,
         timestamp: Date.now(),
       })
       state.activeSubAgents.clear()
       state.isStreaming = false
-      // 3) 触发顶层 toast 通知
-      lastError.value = {
-        session_id: sessionId,
-        message: event.message || '未知错误',
-        at: Date.now(),
+      // 3) 触发顶层 toast 通知（TOOL_PERMISSION_DENIED 是用户自己拒绝的，不弹）
+      if (event.category !== 'TOOL_PERMISSION_DENIED') {
+        lastError.value = {
+          session_id: sessionId,
+          message: event.hint || event.message || '未知错误',
+          at: Date.now(),
+        }
       }
-      console.error('Agent 错误:', event.message)
+      console.error('Agent 错误:', event.category, event.message)
     } else if (event.type === 'session_title') {
       // 用事件携带的 session_id 精确匹配（后台广播场景），fallback 到当前 WS 的 sessionId
       const targetId = event.session_id || sessionId
@@ -554,6 +592,15 @@ export const useChatStore = defineStore('chat', () => {
     getSessionState(sessionId).isStreaming = false
   }
 
+  /** 回复破坏性工具的确认请求（allow / deny / trust_path / trust_command）。 */
+  function sendConfirmResponse(sessionId: string, id: string, decision: ConfirmDecision, extra?: string) {
+    const ws = wsMap.get(sessionId)
+    if (!ws?.isConnected) return
+    ws.sendConfirmResponse(id, decision, extra)
+    // 从 pendingConfirms 移除（后端会在 tool_result 后返回，但 UI 立即隐藏）
+    getSessionState(sessionId).pendingConfirms.delete(id)
+  }
+
   async function renameSession(id: string, title: string) {
     await api.sessions.updateTitle(id, title)
     const s = sessions.value.find((s) => s.id === id)
@@ -601,6 +648,7 @@ export const useChatStore = defineStore('chat', () => {
     switchSession,
     sendMessage,
     stopStreaming,
+    sendConfirmResponse,
     renameSession,
     loadSubagentSessions,
     getSubagentSessions,

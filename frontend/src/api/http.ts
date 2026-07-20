@@ -16,6 +16,7 @@ export interface Session {
   id: string
   title: string
   model: string | null   // 会话专属模型，null = 跟随全局
+  working_dir: string | null  // 会话工作目录，null = 使用全局 workspace
   created_at: string
   updated_at: string
 }
@@ -131,13 +132,26 @@ export interface AppConfig {
   workspace: string
 }
 
+export interface FileNode {
+  name: string
+  path: string
+  type: 'file' | 'dir'
+  children?: FileNode[]
+}
+
+export interface Trusts {
+  session_id: string
+  paths: string[]
+  commands: string[]
+}
+
 export const api = {
   sessions: {
     list: () => request<{ sessions: Session[] }>('/api/sessions'),
-    create: (title = '新会话', model?: string) =>
+    create: (title = '新会话', model?: string, working_dir?: string) =>
       request<Session>('/api/sessions', {
         method: 'POST',
-        body: JSON.stringify({ title, model }),
+        body: JSON.stringify({ title, model, working_dir }),
       }),
     delete: (id: string) =>
       request<{ ok: boolean }>(`/api/sessions/${id}`, { method: 'DELETE' }),
@@ -155,6 +169,32 @@ export const api = {
       }),
     getSubagentSessions: (id: string) =>
       request<{ sessions: Session[] }>(`/api/sessions/${id}/subagent-sessions`),
+    // ── 工作目录 ────────────────────────────────────────
+    getWorkingDir: (id: string) =>
+      request<{ session_id: string; working_dir: string | null }>(`/api/sessions/${id}/working-dir`),
+    setWorkingDir: (id: string, working_dir: string | null) =>
+      request<{ session_id: string; working_dir: string | null }>(`/api/sessions/${id}/working-dir`, {
+        method: 'PUT',
+        body: JSON.stringify({ working_dir }),
+      }),
+    // ── 文件树 ─────────────────────────────────────────
+    listFiles: (id: string, path = '', depth = 1) =>
+      request<{ session_id: string; root: string; path: string; entries: FileNode[] }>(
+        `/api/sessions/${id}/files?path=${encodeURIComponent(path)}&depth=${depth}`
+      ),
+    // ── 信任列表 ───────────────────────────────────────
+    getTrusts: (id: string) =>
+      request<Trusts>(`/api/sessions/${id}/trusts`),
+    addTrust: (id: string, kind: 'path' | 'command', value: string) =>
+      request<Trusts>(`/api/sessions/${id}/trusts`, {
+        method: 'PUT',
+        body: JSON.stringify({ kind, value }),
+      }),
+    removeTrust: (id: string, kind: 'path' | 'command', value: string) =>
+      request<Trusts>(`/api/sessions/${id}/trusts`, {
+        method: 'DELETE',
+        body: JSON.stringify({ kind, value }),
+      }),
   },
   models: {
     list: () => request<{ models: ModelInfo[] }>('/api/models'),

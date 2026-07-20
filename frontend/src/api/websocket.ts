@@ -7,19 +7,28 @@ export type SubAgentInnerEvent =
   | { type: 'done'; content: string }
   | { type: 'error'; message: string }
 
+export type ConfirmPreview =
+  | { kind: 'exec'; command: string; cwd: string }
+  | { kind: 'file'; path: string }
+  | { kind: 'patch'; patch: string }
+
 export type StreamEvent =
   | { type: 'thinking'; content: string }
   | { type: 'tool_call'; name: string; id: string; args: Record<string, unknown> }
   | { type: 'tool_result'; id?: string; name: string; content: string }
   | { type: 'content_delta'; content: string }
   | { type: 'done'; content: string; input_tokens?: number | null; output_tokens?: number | null }
-  | { type: 'error'; message: string }
+  | { type: 'error'; message: string; category?: string; retriable?: boolean; hint?: string }
   | { type: 'session_title'; title: string; session_id?: string }
   | { type: 'task_notification'; task_id: number; task_name: string; status: 'success' | 'error'; session_id: string | null; message: string }
   | { type: 'tool_call_delta'; id: string; args_delta: string }
   | { type: 'subagent_start'; subagent_id: string; session_id: string; task: string }
   | { type: 'subagent_event'; subagent_id: string; event: SubAgentInnerEvent }
   | { type: 'subagent_done'; subagent_id: string; result: string; error?: string }
+  | { type: 'tool_confirm'; id: string; name: string; args: Record<string, unknown>; cwd: string; why: string; preview?: ConfirmPreview; suggested_trust_path?: string; suggested_trust_command?: string }
+  | { type: 'tool_denied'; id: string; name: string; reason: string }
+
+export type ConfirmDecision = 'allow' | 'deny' | 'trust_path' | 'trust_command'
 
 const WS_BASE = import.meta.env.VITE_WS_BASE || 'ws://localhost:8000'
 
@@ -57,6 +66,15 @@ export class AgentWebSocket {
     if (images?.length) msg.images = images
     if (files?.length) msg.files = files
     this.ws?.send(JSON.stringify(msg))
+  }
+
+  sendConfirmResponse(id: string, decision: ConfirmDecision, extra?: string): void {
+    this.ws?.send(JSON.stringify({
+      type: 'tool_confirm_response',
+      id,
+      decision,
+      extra,
+    }))
   }
 
   stop(): void {
