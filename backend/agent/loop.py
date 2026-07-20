@@ -5,6 +5,7 @@ from loguru import logger
 
 from ..providers.base import LLMProvider, StreamEvent
 from ..tools.registry import ToolRegistry
+from ..tools.context import ToolContext
 from ..session.manager import SessionManager
 from .context import ContextBuilder
 from .memory import MemoryManager
@@ -24,7 +25,7 @@ class AgentLoop:
     - SubAgent 模式（depth > 0）：并行派发、隔离执行、事件透传
     """
 
-    TOOL_RESULT_MAX_CHARS = 8000
+    TOOL_RESULT_MAX_CHARS = 20000
 
     def __init__(
         self,
@@ -55,6 +56,24 @@ class AgentLoop:
         self.depth = depth                    # 0=主Agent，1+=SubAgent
         self.allowed_tools = allowed_tools    # 工具白名单（SubAgent 动态指定）
         self._current_session_id: str | None = None  # 当前处理的 session_id（供 SpawnSubAgentsTool 读取）
+        self._current_ctx: ToolContext | None = None  # 当前工具执行上下文（供 SpawnSubAgentsTool 继承）
+
+    def _build_tool_ctx(self, session_id: str, session_row: dict | None, session_meta: dict) -> ToolContext:
+        """从会话行 + metadata 构造 ToolContext。"""
+        working_dir_raw = (session_row or {}).get("working_dir")
+        if working_dir_raw:
+            cwd = Path(working_dir_raw).expanduser().resolve()
+            sandbox_mode = "free"  # 用户显式设置 working_dir → 完全放开
+        else:
+            cwd = self.workspace.resolve()
+            sandbox_mode = "workspace"  # 老会话，保留原行为
+        return ToolContext(
+            cwd=cwd,
+            session_id=session_id,
+            sandbox_mode=sandbox_mode,
+            trusted_paths=list(session_meta.get("trusted_paths") or []),
+            trusted_commands=list(session_meta.get("trusted_commands") or []),
+        )
 
     def create_subagent_loop(self, allowed_tools: list[str] | None = None) -> "AgentLoop":
         """
@@ -103,6 +122,8 @@ class AgentLoop:
             session_overrides: dict[str, bool] = {}
             effective_model = model or self.model
             should_generate_title = False
+            # SubAgent 继承父 ctx（由 SpawnSubAgentsTool 通过 _inherited_ctx 传入）
+            ctx = self._current_ctx
         else:
             # 主 Agent：完整上下文
             history, session_row, session_meta = await asyncio.gather(
@@ -115,6 +136,9 @@ class AgentLoop:
             session_overrides = session_meta.get("tool_overrides", {})
             effective_model = model or session_model or self.model
             messages = await self.context.build_messages(history, user_content, session_id, images=images, files=files)
+            ctx = self._build_tool_ctx(session_id, session_row, session_meta)
+
+        self._current_ctx = ctx
 
         # 查询模型专属参数（未设置则回落到实例级全局值）
         from ..providers.key_manager import get_model_params as _get_model_params
@@ -230,13 +254,14 @@ class AgentLoop:
 
                             sync_cb = make_sync_callback(event_queue)
 
-                            async def run_streaming(tool=tool_obj, params=tc["arguments"], cb=sync_cb, q=event_queue):
+                            async def run_streaming(tool=tool_obj, params=tc["arguments"], cb=sync_cb, q=event_queue, _ctx=ctx):
                                 try:
                                     errors = tool.validate_params(params)
                                     if errors:
                                         result = f"[参数错误] {'; '.join(errors)}"
                                     else:
-                                        result = await tool.execute_streaming(cb, **params)
+                                        call_params = self.tools._inject_ctx(tool, params, _ctx)
+                                        result = await tool.execute_streaming(cb, **call_params)
                                 except Exception as e:
                                     import traceback
                                     result = f"[执行错误] {type(e).__name__}: {e}\n{traceback.format_exc()[-500:]}"
@@ -256,7 +281,9 @@ class AgentLoop:
                         else:
                             # 普通工具：直接执行
                             result = await self.tools.execute(
-                                tc["name"], tc["arguments"], session_overrides=session_overrides
+                                tc["name"], tc["arguments"],
+                                session_overrides=session_overrides,
+                                session_ctx=ctx,
                             )
 
                         if len(result) > self.TOOL_RESULT_MAX_CHARS:
@@ -397,11 +424,13 @@ class AgentLoop:
         context_builder = ContextBuilder(workspace, config_dir, skills_loader, memory_manager, db_manager)
 
         tools = ToolRegistry()
-        tools.register(ReadFileTool(workspace, config.tools.restrict_to_workspace))
-        tools.register(WriteFileTool(workspace, config.tools.restrict_to_workspace))
-        tools.register(EditFileTool(workspace, config.tools.restrict_to_workspace))
-        tools.register(ListDirTool(workspace, config.tools.restrict_to_workspace))
+        # 文件工具无需 workspace 参数：路径通过 ToolContext.cwd 解析
+        tools.register(ReadFileTool())
+        tools.register(WriteFileTool())
+        tools.register(EditFileTool())
+        tools.register(ListDirTool())
         tools.register(ReadSkillTool(workspace))
+        # ExecTool 保留 default_cwd 兜底（无 ctx 时使用，如老会话）
         tools.register(ExecTool(workspace, config.tools.shell_timeout))
         if config.tools.brave_api_key:
             tools.register(WebSearchTool(config.tools.brave_api_key))
