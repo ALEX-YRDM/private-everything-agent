@@ -3,14 +3,20 @@ import { defineComponent, h } from 'vue'
 import { NSpin } from 'naive-ui'
 import type { FileNode } from '../api/http'
 
-/** 递归渲染文件树节点。用 h() 手写以支持深度递归。 */
+/**
+ * 递归渲染文件树节点。用 h() 手写以支持深度递归。
+ *
+ * expanded / loadingPaths 用普通对象 map 而非 Set —— Vue 3 响应式
+ * 追踪属性访问（obj[key]）而非 Set.has() 方法调用，跨 props 传递后
+ * 只有对象形式能在父级替换 map 时触发子组件重渲。
+ */
 export default defineComponent({
   name: 'FileTreeNode',
   props: {
     node: { type: Object as () => FileNode, required: true },
     depth: { type: Number, required: true },
-    expanded: { type: Object as () => Set<string>, required: true },
-    loadingPaths: { type: Object as () => Set<string>, required: true },
+    expanded: { type: Object as () => Record<string, boolean>, required: true },
+    loadingPaths: { type: Object as () => Record<string, boolean>, required: true },
     childrenByPath: { type: Object as () => Record<string, FileNode[]>, required: true },
   },
   emits: {
@@ -22,8 +28,8 @@ export default defineComponent({
 
     return () => {
       const isDir = props.node.type === 'dir'
-      const isOpen = props.expanded.has(props.node.path)
-      const isLoading = props.loadingPaths.has(props.node.path)
+      const isOpen = !!props.expanded[props.node.path]
+      const isLoading = !!props.loadingPaths[props.node.path]
       const indent = props.depth * 12
 
       const row = h(
@@ -34,7 +40,7 @@ export default defineComponent({
           onClick: () => emit('toggle', props.node),
           title: isDir
             ? '点击展开/收起'
-            : '点击插入路径到输入框（Shift+点击直接引用）',
+            : '点击插入路径到输入框',
         },
         [
           h('span', { class: 'tree-icon' }, isDir ? (isOpen ? '▾' : '▸') : ''),

@@ -15,12 +15,17 @@ const emit = defineEmits<{
 const message = useMessage()
 const root = ref<string>('')
 const nodes = ref<FileNode[]>([])
-/** 已展开路径集合。用 Set + 每次替换新引用来触发 Vue reactivity。 */
-const expanded = ref<Set<string>>(new Set())
-/** path → children[] 的独立缓存，与 nodes 树结构解耦，方便触发响应式。 */
+/**
+ * 已展开路径 map（path → true）。
+ * 用普通对象而非 Set：Vue 3 响应式追踪属性访问，Set.has() 是方法调用
+ * 不参与依赖收集，跨 props 传递后子组件无法在 Set 被替换时重渲。
+ */
+const expanded = ref<Record<string, boolean>>({})
+/** path → children[] 的独立缓存 */
 const childrenByPath = ref<Record<string, FileNode[]>>({})
 const loading = ref(false)
-const loadingPaths = ref<Set<string>>(new Set())
+/** 正在加载子节点的路径 map */
+const loadingPaths = ref<Record<string, boolean>>({})
 
 async function loadRoot() {
   if (!props.sessionId || !props.workingDir) {
@@ -33,7 +38,8 @@ async function loadRoot() {
     root.value = data.root
     nodes.value = data.entries
     childrenByPath.value = {}
-    expanded.value = new Set()
+    expanded.value = {}
+    loadingPaths.value = {}
   } catch (e: any) {
     message.error(`加载文件树失败: ${e?.message || e}`)
     nodes.value = []
@@ -48,29 +54,24 @@ async function onNodeClick(node: FileNode) {
     return
   }
   // 目录：切换展开状态
-  const nextExpanded = new Set(expanded.value)
-  if (nextExpanded.has(node.path)) {
-    nextExpanded.delete(node.path)
-    expanded.value = nextExpanded
+  if (expanded.value[node.path]) {
+    expanded.value = { ...expanded.value, [node.path]: false }
     return
   }
-  nextExpanded.add(node.path)
-  expanded.value = nextExpanded
+  expanded.value = { ...expanded.value, [node.path]: true }
 
   // 首次展开：拉取子节点
   if (!childrenByPath.value[node.path] && props.sessionId) {
-    const nextLoading = new Set(loadingPaths.value)
-    nextLoading.add(node.path)
-    loadingPaths.value = nextLoading
+    loadingPaths.value = { ...loadingPaths.value, [node.path]: true }
     try {
       const data = await api.sessions.listFiles(props.sessionId, node.path, 1)
       childrenByPath.value = { ...childrenByPath.value, [node.path]: data.entries }
     } catch (e: any) {
-      message.warning(`加载失败: ${e?.message || e}`)
+      message.warning(`加载 ${node.path} 失败: ${e?.message || e}`)
     } finally {
-      const done = new Set(loadingPaths.value)
-      done.delete(node.path)
-      loadingPaths.value = done
+      const next = { ...loadingPaths.value }
+      delete next[node.path]
+      loadingPaths.value = next
     }
   }
 }
