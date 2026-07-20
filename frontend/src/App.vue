@@ -1,8 +1,9 @@
 <script setup lang="ts">
-import { ref, onMounted, watch, defineComponent } from 'vue'
+import { ref, computed, onMounted, watch, defineComponent } from 'vue'
 import { NConfigProvider, NMessageProvider, NButton, NTooltip, NSpace, useMessage } from 'naive-ui'
 import SessionList from './components/SessionList.vue'
 import ChatPanel from './components/ChatPanel.vue'
+import FileTreePanel from './components/FileTreePanel.vue'
 import SettingsPanel from './components/SettingsPanel.vue'
 import SchedulerPanel from './components/SchedulerPanel.vue'
 import { useChatStore } from './stores/chat'
@@ -12,13 +13,19 @@ const chat = useChatStore()
 const settings = useSettingsStore()
 const showScheduler = ref(false)
 
+// 当前会话的 working_dir → 决定是否显示右侧文件树
+const workingDir = computed(() => chat.currentSession?.working_dir || null)
+
+function handleInsertPath(path: string) {
+  // 简单实现：TODO 后续可接入 ChatPanel 输入框
+  navigator.clipboard?.writeText(path).catch(() => {})
+}
+
 onMounted(async () => {
   await settings.init()
   await chat.init()
 })
 
-// TaskNotificationWatcher 是一个简单的内部组件，
-// 定义在 NMessageProvider 内部才能调用 useMessage
 const TaskNotificationWatcher = defineComponent({
   setup() {
     const msg = useMessage()
@@ -49,6 +56,14 @@ const TaskNotificationWatcher = defineComponent({
 
         <!-- 主聊天区域 -->
         <ChatPanel />
+
+        <!-- 右侧文件树（仅当会话绑定 working_dir 时） -->
+        <FileTreePanel
+          v-if="workingDir"
+          :session-id="chat.currentSessionId"
+          :working-dir="workingDir"
+          @insert-path="handleInsertPath"
+        />
 
         <!-- 右上角操作按钮组 -->
         <div class="top-actions">

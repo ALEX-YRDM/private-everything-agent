@@ -7,9 +7,12 @@ import {
 } from 'naive-ui'
 import MessageBubble from './MessageBubble.vue'
 import SubAgentBlock from './SubAgentBlock.vue'
+import ToolConfirmDialog from './ToolConfirmDialog.vue'
+import WorkingDirPicker from './WorkingDirPicker.vue'
 import { useChatStore } from '../stores/chat'
 import { useSettingsStore } from '../stores/settings'
 import { api, type PromptTemplate, type ToolState } from '../api/http'
+import type { ConfirmDecision } from '../api/websocket'
 
 const chat = useChatStore()
 const settings = useSettingsStore()
@@ -453,8 +456,48 @@ const isViewingRunningSubAgent = computed(() => {
   return chat.getRunningSubAgent(id) !== undefined
 })
 
+// ── 工具确认卡片 ─────────────────────────────────────────────────────────────
+const pendingConfirms = computed(() => {
+  const id = chat.currentSessionId
+  if (!id) return []
+  const state = chat.getSessionState(id)
+  return Array.from(state.pendingConfirms.values())
+})
+
+function handleConfirmDecide(id: string, decision: ConfirmDecision, extra?: string) {
+  const sid = chat.currentSessionId
+  if (!sid) return
+  chat.sendConfirmResponse(sid, id, decision, extra)
+}
+
+// ── 会话工作目录 ─────────────────────────────────────────────────────────────
+const workingDir = computed(() => chat.currentSession?.working_dir || null)
+const showWorkingDirPicker = ref(false)
+const workingDirLabel = computed(() => {
+  if (!workingDir.value) return '默认 workspace'
+  const parts = workingDir.value.split('/').filter(Boolean)
+  return parts[parts.length - 1] || workingDir.value
+})
+
+async function submitWorkingDir(dir: string | null) {
+  const sid = chat.currentSessionId
+  if (!sid) return
+  try {
+    const res = await api.sessions.setWorkingDir(sid, dir)
+    if (chat.currentSession) chat.currentSession.working_dir = res.working_dir
+    showWorkingDirPicker.value = false
+    if (res.working_dir) message.success(`工作目录已设为 ${res.working_dir}`)
+    else message.info('已回落到默认 workspace')
+  } catch (e: any) {
+    message.error(`设置工作目录失败: ${e?.message || e}`)
+  }
+}
+
 // 加载模板
 loadTemplates()
+
+// 供 App.vue 顶层监听 workingDir 变化
+defineExpose({ workingDir })
 </script>
 
 <template>
@@ -464,6 +507,20 @@ loadTemplates()
       <span class="chat-title">
         {{ chat.currentSession?.title || '选择或创建会话' }}
       </span>
+      <NTooltip v-if="chat.currentSession">
+        <template #trigger>
+          <NButton
+            size="tiny"
+            quaternary
+            :type="workingDir ? 'primary' : 'default'"
+            @click="showWorkingDirPicker = true"
+            style="margin-left: 8px"
+          >
+            🗂 {{ workingDirLabel }}
+          </NButton>
+        </template>
+        {{ workingDir ? `会话工作目录：${workingDir}` : '点击设置会话工作目录（AI 编码模式）' }}
+      </NTooltip>
       <NTooltip v-if="contextUsage" placement="bottom">
         <template #trigger>
           <span class="context-usage" :class="{ warn: contextUsage.pct >= 60, danger: contextUsage.pct >= 80 }">
@@ -501,6 +558,15 @@ loadTemplates()
           <NSpin size="small" />
           <span>思考中…</span>
         </div>
+
+        <!-- 破坏性工具确认卡片（会话内联渲染） -->
+        <ToolConfirmDialog
+          v-for="cf in pendingConfirms"
+          :key="cf.id"
+          :confirm="cf"
+          @decide="(d, extra) => handleConfirmDecide(cf.id, d, extra)"
+        />
+
         <!-- 底部哨兵：用于定位 NScrollbar 的滚动容器，不可见 -->
         <div ref="messagesEndRef" />
       </div>
@@ -757,6 +823,13 @@ loadTemplates()
     <div v-else class="no-session-hint">
       请从左侧选择或创建一个会话
     </div>
+
+    <!-- 工作目录选择器 -->
+    <WorkingDirPicker
+      v-model:show="showWorkingDirPicker"
+      :current-dir="workingDir"
+      @submit="submitWorkingDir"
+    />
   </div>
 </template>
 

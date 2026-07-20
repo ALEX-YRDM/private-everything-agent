@@ -23,6 +23,27 @@ const formattedTime = computed(() => {
 
 const renderedContent = computed(() => renderMarkdown(props.message.content))
 
+const ERROR_META: Record<string, { icon: string; title: string }> = {
+  LLM_AUTH:              { icon: '🔑', title: 'API Key 无效' },
+  LLM_RATE_LIMIT:        { icon: '⏳', title: '触发速率限制' },
+  LLM_CONTEXT_OVERFLOW:  { icon: '📚', title: '上下文超限' },
+  LLM_MODEL_NOT_FOUND:   { icon: '❓', title: '模型不存在' },
+  LLM_TIMEOUT:           { icon: '⏱️', title: '请求超时' },
+  LLM_UNKNOWN:           { icon: '⚠️', title: '大模型调用失败' },
+  TOOL_PERMISSION_DENIED:{ icon: '🚫', title: '操作被拒绝' },
+  TOOL_PATH_INVALID:     { icon: '📁', title: '路径非法' },
+  TOOL_EXEC_FAILED:      { icon: '💥', title: '工具执行失败' },
+  TOOL_TIMEOUT:          { icon: '⏱️', title: '工具超时' },
+}
+
+const errorMeta = computed(() => {
+  const cat = props.message.errorCategory
+  if (cat && ERROR_META[cat]) return ERROR_META[cat]!
+  return ERROR_META.LLM_UNKNOWN!
+})
+const errorIcon = computed(() => errorMeta.value.icon)
+const errorTitle = computed(() => errorMeta.value.title)
+
 function formatFileSize(bytes?: number): string {
   if (bytes == null) return ''
   if (bytes < 1024) return `${bytes} B`
@@ -120,9 +141,10 @@ async function handleMarkdownClick(e: MouseEvent) {
 
       <template v-else-if="message.role === 'error'">
         <div class="error-content">
-          <span class="error-icon">⚠️</span>
+          <span class="error-icon">{{ errorIcon }}</span>
           <div class="error-text">
-            <div class="error-title">大模型调用失败</div>
+            <div class="error-title">{{ errorTitle }}</div>
+            <div v-if="message.errorHint" class="error-hint">{{ message.errorHint }}</div>
             <div class="error-message">{{ message.content }}</div>
           </div>
         </div>
@@ -209,6 +231,16 @@ async function handleMarkdownClick(e: MouseEvent) {
   font-weight: 600;
   font-size: 13px;
   margin-bottom: 4px;
+}
+
+.error-hint {
+  font-size: 12px;
+  color: #a8071a;
+  background: rgba(255, 255, 255, 0.55);
+  border-radius: 4px;
+  padding: 4px 8px;
+  margin-bottom: 6px;
+  line-height: 1.5;
 }
 
 .error-message {
