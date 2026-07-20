@@ -182,6 +182,18 @@ export const api = {
       request<{ session_id: string; root: string; path: string; entries: FileNode[] }>(
         `/api/sessions/${id}/files?path=${encodeURIComponent(path)}&depth=${depth}`
       ),
+    searchFiles: (id: string, q: string, limit = 30) =>
+      request<{ session_id: string; query: string; results: Array<{ path: string; name: string }>; truncated: boolean }>(
+        `/api/sessions/${id}/files/search?q=${encodeURIComponent(q)}&limit=${limit}`
+      ),
+    gitStatus: (id: string) =>
+      request<{ is_git: boolean; branch: string | null; files: Record<string, string>; counts: Record<string, number> }>(
+        `/api/sessions/${id}/git-status`
+      ),
+    getFileContent: (id: string, path: string) =>
+      request<{ session_id: string; path: string; size: number; truncated: boolean; content: string }>(
+        `/api/sessions/${id}/file-content?path=${encodeURIComponent(path)}`
+      ),
     // ── 信任列表 ───────────────────────────────────────
     getTrusts: (id: string) =>
       request<Trusts>(`/api/sessions/${id}/trusts`),

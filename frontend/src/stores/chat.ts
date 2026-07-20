@@ -39,6 +39,7 @@ export interface DisplayMessage {
   content: string
   images?: string[]          // base64 data URL 图片列表（用户消息附图）
   files?: FileAttachment[]   // 文件附件列表
+  attachedPaths?: string[]   // 用户消息发送时携带的 @ 引用路径（只读展示）
   reasoning?: string
   toolCalls?: ToolCallDisplay[]
   toolResults?: Record<string, string>
@@ -70,6 +71,8 @@ interface SessionState {
   subagentSessionsLoaded: boolean
   // 破坏性工具确认请求（tool_call_id → payload）
   pendingConfirms: Map<string, PendingConfirm>
+  // 附加到"下一条消息"的文件路径列表（发送后清空；切会话不共享）
+  pendingAttachments: string[]
 }
 
 const TASK_TOOLS = new Set(['create_task', 'delete_task', 'update_task'])
@@ -97,6 +100,37 @@ export const useChatStore = defineStore('chat', () => {
     sessions.value.find((s) => s.id === currentSessionId.value) || null
   )
 
+  // 当前会话的 pendingAttachments（响应式）
+  const pendingAttachments = computed(() =>
+    currentSessionId.value
+      ? (sessionStates.value[currentSessionId.value]?.pendingAttachments ?? [])
+      : [],
+  )
+
+  /** 加入附件；重复路径不再加（去重）。返回是否真的加入了。 */
+  function addAttachment(path: string): boolean {
+    const sid = currentSessionId.value
+    if (!sid) return false
+    const state = getSessionState(sid)
+    if (state.pendingAttachments.includes(path)) return false
+    state.pendingAttachments = [...state.pendingAttachments, path]
+    return true
+  }
+
+  function removeAttachment(path: string) {
+    const sid = currentSessionId.value
+    if (!sid) return
+    const state = getSessionState(sid)
+    state.pendingAttachments = state.pendingAttachments.filter((p) => p !== path)
+  }
+
+  function clearAttachments(sessionId?: string) {
+    const sid = sessionId ?? currentSessionId.value
+    if (!sid) return
+    const state = getSessionState(sid)
+    state.pendingAttachments = []
+  }
+
   // 当前会话的状态，派生自 sessionStates（per-session 状态 Map）
   const messages = computed(() =>
     currentSessionId.value ? (sessionStates.value[currentSessionId.value]?.messages ?? []) : []
@@ -119,9 +153,10 @@ export const useChatStore = defineStore('chat', () => {
         subagentSessions: [],
         subagentSessionsLoaded: false,
         pendingConfirms: new Map(),
+        pendingAttachments: [],
       }
     }
-    return sessionStates.value[sessionId]
+    return sessionStates.value[sessionId]!
   }
 
   async function loadSessions() {
@@ -561,14 +596,28 @@ export const useChatStore = defineStore('chat', () => {
     const state = getSessionState(sessionId)
     if (state.isStreaming) return
 
+    // 消费 pendingAttachments：拼到 content 尾部让 Agent 感知，同时留一份在气泡上展示
+    const attached = state.pendingAttachments.slice()
+    let outgoingContent = content
+    if (attached.length) {
+      const list = attached.map((p) => `- ${p}`).join('\n')
+      outgoingContent = content
+        ? `${content}\n\n[本条附加了以下文件（相对当前 cwd）：]\n${list}`
+        : `[本条附加了以下文件（相对当前 cwd）：]\n${list}`
+    }
+
     state.messages.push({
       id: `user-${Date.now()}`,
       role: 'user',
-      content,
+      content,   // 气泡里只显示用户手写的部分
       images: images?.length ? images : undefined,
       files: files?.length ? files.map(f => ({ name: f.name, mime_type: f.mime_type, size: f.size })) : undefined,
+      attachedPaths: attached.length ? attached : undefined,
       timestamp: Date.now(),
     })
+
+    // 清空 pendingAttachments（发一次消费一次）
+    state.pendingAttachments = []
 
     state.isStreaming = true
     state.streamingMessage = null
@@ -585,7 +634,7 @@ export const useChatStore = defineStore('chat', () => {
         }
       )
     }
-    ws.sendMessage(content, images, files)
+    ws.sendMessage(outgoingContent, images, files)
   }
 
   function stopStreaming() {
@@ -648,6 +697,10 @@ export const useChatStore = defineStore('chat', () => {
     lastTaskNotification,
     lastError,
     pendingInsert,
+    pendingAttachments,
+    addAttachment,
+    removeAttachment,
+    clearAttachments,
     requestInsertToInput,
     init,
     loadSessions,

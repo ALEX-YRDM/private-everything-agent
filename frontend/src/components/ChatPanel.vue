@@ -9,14 +9,16 @@ import MessageBubble from './MessageBubble.vue'
 import SubAgentBlock from './SubAgentBlock.vue'
 import ToolConfirmDialog from './ToolConfirmDialog.vue'
 import WorkingDirPicker from './WorkingDirPicker.vue'
+import MentionPopover, { type MentionCandidate } from './MentionPopover.vue'
 import { useChatStore } from '../stores/chat'
 import { useSettingsStore } from '../stores/settings'
 import { api, type PromptTemplate, type ToolState } from '../api/http'
 import type { ConfirmDecision } from '../api/websocket'
 
-// App.vue provide 的两个动作（打开定时任务 / 打开设置面板）
+// App.vue provide 的三个动作
 const openScheduler = inject<() => void>('openScheduler', () => {})
 const openSettings = inject<() => void>('openSettings', () => {})
+const toggleTerminal = inject<() => void>('toggleTerminal', () => {})
 
 const chat = useChatStore()
 const settings = useSettingsStore()
@@ -262,6 +264,8 @@ function getMimeType(filename: string): string {
 }
 
 function handleKeydown(e: KeyboardEvent) {
+  // 如果 @mention 面板正在处理，让它先消费键盘
+  if (handleMentionKeydown(e)) return
   if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) {
     e.preventDefault()
     sendMessage()
@@ -518,6 +522,158 @@ watch(() => chat.pendingInsert, (v) => {
 
 // 供 App.vue 顶层监听 workingDir 变化
 defineExpose({ workingDir })
+
+/** chip 显示用：目录 + 文件名，太长时截断中间 */
+function shortPath(p: string): string {
+  if (p.length <= 42) return p
+  const parts = p.split('/')
+  const last = parts.pop() || p
+  return `…/${last}`
+}
+
+// ── @mention 补全 ─────────────────────────────────────────────────────────
+//
+// 在 textarea 里检测最后一个未闭合的 @<query>，弹出 MentionPopover。
+// - 只在光标位置的 token 边界起效（@ 前必须是行首或空白）
+// - Enter/Tab 选中；Esc 关闭
+// - 选中后：调用 chat.addAttachment，把输入框里的 `@query` 片段删掉
+//
+const mentionShow = ref(false)
+const mentionQuery = ref('')
+const mentionCandidates = ref<MentionCandidate[]>([])
+const mentionActiveIdx = ref(0)
+const mentionLoading = ref(false)
+const mentionAnchorLeft = ref(0)
+const mentionAnchorBottom = ref(0)
+let mentionRange: { start: number; end: number } | null = null
+let mentionDebounce: number | null = null
+
+/** 从光标向前找最近的 @：位于行首或空白之后才算 mention 触发点 */
+function detectMention(el: HTMLTextAreaElement): { query: string; start: number; end: number } | null {
+  const value = el.value
+  const caret = el.selectionStart ?? value.length
+  if (caret === 0) return null
+  // 从光标向前扫描到最近的 @ 或空白
+  let i = caret - 1
+  while (i >= 0) {
+    const ch = value[i]
+    if (ch === '@') {
+      // 检查 @ 前一位必须是行首或空白
+      const prev = i > 0 ? value[i - 1] : ''
+      if (i === 0 || prev === ' ' || prev === '\n' || prev === '\t') {
+        const q = value.slice(i + 1, caret)
+        // query 不能含空白 / 换行
+        if (/\s/.test(q)) return null
+        return { query: q, start: i, end: caret }
+      }
+      return null
+    }
+    if (ch === ' ' || ch === '\n' || ch === '\t') return null
+    i--
+  }
+  return null
+}
+
+async function requestMention(q: string) {
+  const sid = chat.currentSessionId
+  if (!sid) return
+  mentionLoading.value = true
+  try {
+    const data = await api.sessions.searchFiles(sid, q, 30)
+    mentionCandidates.value = data.results
+    mentionActiveIdx.value = 0
+  } catch {
+    mentionCandidates.value = []
+  } finally {
+    mentionLoading.value = false
+  }
+}
+
+function scheduleMentionFetch(q: string) {
+  if (mentionDebounce != null) window.clearTimeout(mentionDebounce)
+  mentionDebounce = window.setTimeout(() => {
+    requestMention(q)
+    mentionDebounce = null
+  }, 120)
+}
+
+function positionMentionPopover(el: HTMLTextAreaElement) {
+  // 简单方案：popover 挂在 textarea 上方，left 对齐 textarea 左边
+  const chatPanel = el.closest('.chat-panel') as HTMLElement | null
+  if (!chatPanel) return
+  const panelRect = chatPanel.getBoundingClientRect()
+  const taRect = el.getBoundingClientRect()
+  mentionAnchorLeft.value = taRect.left - panelRect.left
+  // bottom 计算：距离 panel 底部的距离
+  mentionAnchorBottom.value = panelRect.bottom - taRect.top + 4
+}
+
+function onInputChange() {
+  const el = document.querySelector('.message-input textarea') as HTMLTextAreaElement | null
+  if (!el || !chat.currentSession?.working_dir) {
+    mentionShow.value = false
+    return
+  }
+  const det = detectMention(el)
+  if (!det) {
+    mentionShow.value = false
+    mentionRange = null
+    return
+  }
+  mentionRange = { start: det.start, end: det.end }
+  mentionQuery.value = det.query
+  mentionShow.value = true
+  positionMentionPopover(el)
+  scheduleMentionFetch(det.query)
+}
+
+function acceptMention(c: MentionCandidate) {
+  if (!mentionRange) { mentionShow.value = false; return }
+  const added = chat.addAttachment(c.path)
+  if (!added) message.info(`${c.path} 已在附加列表中`)
+  // 把输入框里的 @xxx 段删掉
+  const before = inputText.value.slice(0, mentionRange.start)
+  const after = inputText.value.slice(mentionRange.end)
+  inputText.value = before + after
+  mentionShow.value = false
+  mentionRange = null
+  nextTick(() => {
+    const el = document.querySelector('.message-input textarea') as HTMLTextAreaElement | null
+    if (el) {
+      el.focus()
+      el.selectionStart = el.selectionEnd = before.length
+    }
+  })
+}
+
+/** 键盘事件在 mention 打开时优先处理 */
+function handleMentionKeydown(e: KeyboardEvent): boolean {
+  if (!mentionShow.value) return false
+  if (e.key === 'ArrowDown') {
+    e.preventDefault()
+    mentionActiveIdx.value = Math.min(mentionActiveIdx.value + 1, mentionCandidates.value.length - 1)
+    return true
+  }
+  if (e.key === 'ArrowUp') {
+    e.preventDefault()
+    mentionActiveIdx.value = Math.max(mentionActiveIdx.value - 1, 0)
+    return true
+  }
+  if (e.key === 'Enter' || e.key === 'Tab') {
+    const c = mentionCandidates.value[mentionActiveIdx.value]
+    if (c) {
+      e.preventDefault()
+      acceptMention(c)
+      return true
+    }
+  }
+  if (e.key === 'Escape') {
+    e.preventDefault()
+    mentionShow.value = false
+    return true
+  }
+  return false
+}
 </script>
 
 <template>
@@ -551,6 +707,12 @@ defineExpose({ workingDir })
           已使用 {{ contextUsage.used.toLocaleString() }} / {{ contextUsage.total.toLocaleString() }} tokens
         </NTooltip>
         <span class="header-divider" />
+        <NTooltip>
+          <template #trigger>
+            <button class="icon-btn" :class="{ active: !!workingDir }" @click="toggleTerminal" :disabled="!workingDir">🖥</button>
+          </template>
+          {{ workingDir ? '本地终端（在 cwd 中打开）' : '需要先设置会话工作目录' }}
+        </NTooltip>
         <NTooltip>
           <template #trigger>
             <button class="icon-btn" @click="openScheduler">⏰</button>
@@ -791,6 +953,22 @@ defineExpose({ workingDir })
 
       <!-- 输入框 + 发送按钮 -->
       <div class="input-row" @drop.prevent="handleDrop" @dragover.prevent @paste="handlePaste">
+        <!-- @ 引用附件 chip 条（发一次消费一次） -->
+        <div v-if="chat.pendingAttachments.length" class="pending-attachments">
+          <div class="pa-label">📎 附加到本条：</div>
+          <div class="pa-chips">
+            <span
+              v-for="p in chat.pendingAttachments"
+              :key="p"
+              class="pa-chip"
+              :title="p"
+            >
+              <span class="pa-chip-name">{{ shortPath(p) }}</span>
+              <button class="pa-chip-x" @click="chat.removeAttachment(p)" title="移除">✕</button>
+            </span>
+            <button class="pa-clear" @click="chat.clearAttachments()">清空</button>
+          </div>
+        </div>
         <!-- 图片预览区 -->
         <div v-if="attachedImages.length" class="attached-images">
           <div v-for="(img, idx) in attachedImages" :key="idx" class="attached-image-item">
@@ -810,9 +988,12 @@ defineExpose({ workingDir })
             v-model:value="inputText"
             type="textarea"
             :autosize="{ minRows: 4, maxRows: 16 }"
-            :placeholder="chat.isStreaming ? '等待响应完成…' : '发送消息（Enter 发送，Shift+Enter 换行）'"
+            :placeholder="chat.isStreaming ? '等待响应完成…' : '发送消息（Enter 发送，Shift+Enter 换行；输入 @ 可引用文件）'"
             :disabled="chat.isStreaming"
             @keydown="handleKeydown"
+            @input="onInputChange"
+            @focus="onInputChange"
+            @click="onInputChange"
             class="message-input"
           />
           <div class="input-actions">
@@ -865,6 +1046,19 @@ defineExpose({ workingDir })
       :current-dir="workingDir"
       @submit="submitWorkingDir"
     />
+
+    <!-- @mention 补全下拉 -->
+    <MentionPopover
+      v-if="mentionShow"
+      :candidates="mentionCandidates"
+      :active-index="mentionActiveIdx"
+      :loading="mentionLoading"
+      :query="mentionQuery"
+      :anchor-left="mentionAnchorLeft"
+      :anchor-bottom="mentionAnchorBottom"
+      @pick="acceptMention"
+      @hover-index="(i) => (mentionActiveIdx = i)"
+    />
   </div>
 </template>
 
@@ -875,6 +1069,7 @@ defineExpose({ workingDir })
   flex-direction: column;
   min-width: 0;
   background: white;
+  position: relative;  /* 供 MentionPopover 绝对定位使用 */
 }
 
 .chat-header {
@@ -1053,6 +1248,80 @@ defineExpose({ workingDir })
   flex-wrap: wrap;
   gap: 8px;
 }
+
+/* @ 附件 chip 条 */
+.pending-attachments {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 6px 10px;
+  background: #f0f7ff;
+  border: 1px dashed #bfd4ff;
+  border-radius: 8px;
+  font-size: 12px;
+  color: #1e40af;
+}
+
+.pa-label {
+  flex-shrink: 0;
+  font-weight: 500;
+  color: #2563eb;
+  padding-top: 3px;
+}
+
+.pa-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  flex: 1;
+  min-width: 0;
+}
+
+.pa-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  background: white;
+  border: 1px solid #bfd4ff;
+  border-radius: 6px;
+  padding: 2px 4px 2px 8px;
+  font-family: 'SF Mono', 'Monaco', monospace;
+  font-size: 11px;
+  color: #1e40af;
+  max-width: 260px;
+}
+
+.pa-chip-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
+  min-width: 0;
+}
+
+.pa-chip-x {
+  border: none;
+  background: transparent;
+  color: #6b7280;
+  cursor: pointer;
+  padding: 0 3px;
+  font-size: 11px;
+  border-radius: 3px;
+  flex-shrink: 0;
+}
+.pa-chip-x:hover { background: #fee2e2; color: #dc2626; }
+
+.pa-clear {
+  border: none;
+  background: transparent;
+  color: #6b7280;
+  cursor: pointer;
+  font-size: 11px;
+  padding: 2px 6px;
+  border-radius: 4px;
+  align-self: center;
+}
+.pa-clear:hover { background: rgba(37, 99, 235, 0.08); color: #2563eb; }
 
 .attached-image-item {
   position: relative;

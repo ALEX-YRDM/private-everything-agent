@@ -119,6 +119,10 @@ async function handleMarkdownClick(e: MouseEvent) {
             <span v-if="file.size != null" class="file-size">{{ formatFileSize(file.size) }}</span>
           </div>
         </div>
+        <div v-if="message.attachedPaths?.length" class="user-attached-paths">
+          <span class="uap-label">📎 引用</span>
+          <code v-for="p in message.attachedPaths" :key="p" class="uap-path" :title="p">{{ p }}</code>
+        </div>
         <div class="user-content">{{ message.content }}</div>
       </template>
 
@@ -318,6 +322,37 @@ async function handleMarkdownClick(e: MouseEvent) {
   padding: 6px;
   background: rgba(255, 255, 255, 0.1);
   border-radius: 6px;
+}
+
+.user-attached-paths {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-bottom: 6px;
+  padding: 6px 8px;
+  background: rgba(255, 255, 255, 0.12);
+  border-radius: 6px;
+  font-size: 11px;
+  color: rgba(255, 255, 255, 0.9);
+  align-items: center;
+}
+.uap-label {
+  font-size: 11px;
+  color: rgba(255, 255, 255, 0.75);
+  font-weight: 500;
+  flex-shrink: 0;
+}
+.uap-path {
+  font-family: 'SF Mono', 'Monaco', monospace;
+  font-size: 11px;
+  color: white;
+  background: rgba(255, 255, 255, 0.15);
+  padding: 1px 6px;
+  border-radius: 3px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 240px;
 }
 
 .file-item {
