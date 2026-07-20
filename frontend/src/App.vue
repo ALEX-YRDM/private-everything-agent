@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import { ref, computed, onMounted, watch, defineComponent } from 'vue'
-import { NConfigProvider, NMessageProvider, NButton, NTooltip, NSpace, useMessage } from 'naive-ui'
+import { ref, computed, onMounted, watch, defineComponent, provide } from 'vue'
+import { NConfigProvider, NMessageProvider, useMessage } from 'naive-ui'
 import SessionList from './components/SessionList.vue'
 import ChatPanel from './components/ChatPanel.vue'
 import FileTreePanel from './components/FileTreePanel.vue'
@@ -17,9 +17,13 @@ const showScheduler = ref(false)
 const workingDir = computed(() => chat.currentSession?.working_dir || null)
 
 function handleInsertPath(path: string) {
-  // 通过 store 广播给 ChatPanel，在输入框末尾追加相对路径
   chat.requestInsertToInput(path)
 }
+
+// 把「打开定时任务 / 打开设置」通过 provide 暴露给 ChatPanel，
+// 让按钮组内嵌到 chat-header 右端，避免 fixed 悬浮与其他 header 元素重叠
+provide('openScheduler', () => { showScheduler.value = true })
+provide('openSettings', () => { settings.showSettings = true })
 
 onMounted(async () => {
   await settings.init()
@@ -54,7 +58,7 @@ const TaskNotificationWatcher = defineComponent({
         <!-- 左侧会话列表 -->
         <SessionList />
 
-        <!-- 主聊天区域 -->
+        <!-- 主聊天区域（含内嵌的顶部按钮组） -->
         <ChatPanel />
 
         <!-- 右侧文件树（仅当会话绑定 working_dir 时） -->
@@ -64,24 +68,6 @@ const TaskNotificationWatcher = defineComponent({
           :working-dir="workingDir"
           @insert-path="handleInsertPath"
         />
-
-        <!-- 右上角操作按钮组（文件树打开时向左偏移，避免与其重叠） -->
-        <div class="top-actions" :style="{ right: workingDir ? '274px' : '14px' }">
-          <NSpace>
-            <NTooltip>
-              <template #trigger>
-                <NButton circle @click="showScheduler = true">⏰</NButton>
-              </template>
-              定时任务
-            </NTooltip>
-            <NTooltip>
-              <template #trigger>
-                <NButton circle @click="settings.showSettings = true">⚙️</NButton>
-              </template>
-              系统设置
-            </NTooltip>
-          </NSpace>
-        </div>
 
         <!-- 设置面板 -->
         <SettingsPanel />
@@ -111,13 +97,5 @@ html, body, #app {
   display: flex;
   position: relative;
   overflow: hidden;
-}
-
-.top-actions {
-  position: fixed;
-  top: 10px;
-  right: 14px;
-  z-index: 100;
-  transition: right 0.18s ease;
 }
 </style>

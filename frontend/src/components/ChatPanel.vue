@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, nextTick, watch, onMounted, onUnmounted } from 'vue'
+import { ref, computed, nextTick, watch, onMounted, onUnmounted, inject } from 'vue'
 import {
   NInput, NButton, NScrollbar, NSpin, NEmpty, NTooltip,
   NPopover, NDivider, NSwitch, NTag, NSelect,
@@ -13,6 +13,10 @@ import { useChatStore } from '../stores/chat'
 import { useSettingsStore } from '../stores/settings'
 import { api, type PromptTemplate, type ToolState } from '../api/http'
 import type { ConfirmDecision } from '../api/websocket'
+
+// App.vue provide 的两个动作（打开定时任务 / 打开设置面板）
+const openScheduler = inject<() => void>('openScheduler', () => {})
+const openSettings = inject<() => void>('openSettings', () => {})
 
 const chat = useChatStore()
 const settings = useSettingsStore()
@@ -520,31 +524,45 @@ defineExpose({ workingDir })
   <div class="chat-panel" :class="{ 'has-working-dir': !!workingDir }">
     <!-- 顶部标题栏 -->
     <div class="chat-header">
-      <span class="chat-title">
+      <span class="chat-title" :title="chat.currentSession?.title">
         {{ chat.currentSession?.title || '选择或创建会话' }}
       </span>
-      <NTooltip v-if="chat.currentSession">
-        <template #trigger>
-          <NButton
-            size="tiny"
-            quaternary
-            :type="workingDir ? 'primary' : 'default'"
-            @click="showWorkingDirPicker = true"
-            style="margin-left: 8px"
-          >
-            🗂 {{ workingDirLabel }}
-          </NButton>
-        </template>
-        {{ workingDir ? `会话工作目录：${workingDir}` : '点击设置会话工作目录（AI 编码模式）' }}
-      </NTooltip>
-      <NTooltip v-if="contextUsage" placement="bottom">
-        <template #trigger>
-          <span class="context-usage" :class="{ warn: contextUsage.pct >= 60, danger: contextUsage.pct >= 80 }">
-            上下文 {{ contextUsage.pct }}%
-          </span>
-        </template>
-        已使用 {{ contextUsage.used.toLocaleString() }} / {{ contextUsage.total.toLocaleString() }} tokens（{{ contextUsage.pct }}%）
-      </NTooltip>
+      <div class="header-actions">
+        <NTooltip v-if="chat.currentSession">
+          <template #trigger>
+            <NButton
+              size="tiny"
+              quaternary
+              :type="workingDir ? 'primary' : 'default'"
+              @click="showWorkingDirPicker = true"
+            >
+              🗂 {{ workingDirLabel }}
+            </NButton>
+          </template>
+          {{ workingDir ? `会话工作目录：${workingDir}` : '点击设置会话工作目录（AI 编码模式）' }}
+        </NTooltip>
+        <NTooltip v-if="contextUsage" placement="bottom">
+          <template #trigger>
+            <span class="context-usage" :class="{ warn: contextUsage.pct >= 60, danger: contextUsage.pct >= 80 }">
+              上下文 {{ contextUsage.pct }}%
+            </span>
+          </template>
+          已使用 {{ contextUsage.used.toLocaleString() }} / {{ contextUsage.total.toLocaleString() }} tokens（{{ contextUsage.pct }}%）
+        </NTooltip>
+        <span class="header-divider" />
+        <NTooltip>
+          <template #trigger>
+            <NButton circle size="small" @click="openScheduler">⏰</NButton>
+          </template>
+          定时任务
+        </NTooltip>
+        <NTooltip>
+          <template #trigger>
+            <NButton circle size="small" @click="openSettings">⚙️</NButton>
+          </template>
+          系统设置
+        </NTooltip>
+      </div>
     </div>
 
     <!-- 消息区域 -->
@@ -859,16 +877,27 @@ defineExpose({ workingDir })
 }
 
 .chat-header {
-  padding: 14px 20px;
-  padding-right: 20px;
+  padding: 10px 16px;
   border-bottom: 1px solid #e8e8e8;
   display: flex;
   align-items: center;
+  gap: 12px;
   min-height: 52px;
 }
-/* 无工作目录时右上角按钮组悬浮在 chat-header 上方，需要留空 */
-.chat-panel:not(.has-working-dir) .chat-header {
-  padding-right: 100px;
+
+.header-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+  margin-left: auto;
+}
+
+.header-divider {
+  width: 1px;
+  height: 18px;
+  background: #e8e8e8;
+  margin: 0 2px;
 }
 
 .chat-title {
@@ -878,7 +907,8 @@ defineExpose({ workingDir })
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  flex: 1;
+  flex: 1 1 auto;
+  min-width: 0;
 }
 
 .context-usage {
