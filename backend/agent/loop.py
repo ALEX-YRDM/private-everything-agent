@@ -60,6 +60,16 @@ class AgentLoop:
         self.allowed_tools = allowed_tools    # 工具白名单（SubAgent 动态指定）
         self._current_session_id: str | None = None  # 当前处理的 session_id（供 SpawnSubAgentsTool 读取）
         self._current_ctx: ToolContext | None = None  # 当前工具执行上下文（供 SpawnSubAgentsTool 继承）
+        # 后台任务强引用池：防止 asyncio.create_task 出来的 task 被 GC
+        # https://docs.python.org/3/library/asyncio-task.html#creating-tasks
+        self._background_tasks: set[asyncio.Task] = set()
+
+    def _spawn_background(self, coro) -> asyncio.Task:
+        """派发一个后台任务并持有强引用，防止 GC 提前中止。"""
+        task = asyncio.create_task(coro)
+        self._background_tasks.add(task)
+        task.add_done_callback(self._background_tasks.discard)
+        return task
 
     def _build_tool_ctx(self, session_id: str, session_row: dict | None, session_meta: dict) -> ToolContext:
         """从会话行 + metadata 构造 ToolContext。"""
@@ -495,9 +505,12 @@ class AgentLoop:
 
             # 主 Agent 才生成标题（后台任务，不阻塞主流程）
             if should_generate_title and final_content:
-                asyncio.create_task(
+                logger.info(f"[title-gen] 准备为会话 {session_id} 派发标题生成任务（final_content 长度={len(final_content)}）")
+                self._spawn_background(
                     self._generate_title_and_notify(session_id, user_content, final_content, effective_model)
                 )
+            else:
+                logger.info(f"[title-gen] 跳过标题生成 session={session_id} should={should_generate_title} has_final={bool(final_content)}")
 
         except asyncio.CancelledError:
             logger.info(f"会话 {session_id} 的流式响应被取消")
@@ -525,7 +538,7 @@ class AgentLoop:
 
             # SubAgent 不做全局记忆整合（throwaway session）
             if not is_subagent:
-                asyncio.create_task(
+                self._spawn_background(
                     self.memory.maybe_consolidate(
                         session_id, self.provider, effective_model,
                         context_window=effective_context_window,
@@ -536,21 +549,32 @@ class AgentLoop:
         self, session_id: str, user_message: str, ai_response: str, model: str
     ):
         """后台生成标题并广播 session_title 事件（通过 connection_manager）。"""
+        logger.info(f"[title-gen] 开始为会话 {session_id} 生成标题（model={model}）")
         try:
             title = await self._generate_title(user_message, ai_response, model)
+            logger.info(f"[title-gen] 会话 {session_id} 生成标题: {title!r}")
             if title:
-                await self.sessions.update_title(session_id, title)
+                ok = await self.sessions.update_title(session_id, title)
+                logger.info(f"[title-gen] update_title returned {ok}")
                 from ..api.connection_manager import manager
                 await manager.broadcast({"type": "session_title", "title": title, "session_id": session_id})
+                logger.info(f"[title-gen] broadcast 完成")
+            else:
+                logger.warning(f"[title-gen] 会话 {session_id} 标题为空，跳过")
         except Exception as e:
-            logger.warning(f"生成会话标题失败: {e}")
+            logger.exception(f"[title-gen] 生成会话标题失败: {e}")
 
     async def _generate_title(self, user_message: str, ai_response: str, model: str) -> str:
-        """基于首轮对话内容生成简洁的会话标题。"""
+        """基于首轮对话内容生成简洁的会话标题。
+
+        注意 max_tokens 要留足给思考型模型（GLM-5.2、DeepSeek-R1 等）的
+        reasoning_content —— 那部分不算在最终 content 里但会消耗 output 配额。
+        """
         prompt = (
-            "根据以下对话，生成一个简洁的中文标题（不超过15个字，只输出标题本身，不要引号或标点）：\n\n"
-            f"用户：{user_message[:300]}\n"
-            f"助手：{ai_response[:300]}\n\n"
+            "为下面这段对话起一个不超过15字的中文标题。"
+            "直接输出标题本身，不要引号、标点、前缀说明、思考过程。\n\n"
+            f"[用户]\n{user_message[:400]}\n\n"
+            f"[助手]\n{ai_response[:400]}\n\n"
             "标题："
         )
         title = ""
@@ -559,13 +583,21 @@ class AgentLoop:
             tools=None,
             model=model,
             temperature=0.3,
-            max_tokens=30,
+            max_tokens=2000,   # 给思考型模型留 reasoning 配额；final content 会自然很短
         ):
             if event.type == "content_delta":
                 title += event.content
             elif event.type in ("done", "error"):
                 break
-        return title.strip().strip('"').strip("'")[:20]
+        # 清洗：去掉常见前缀 / 引号 / 换行
+        cleaned = title.strip().strip('"').strip("'").strip("「").strip("」")
+        # 只保留第一行（防止模型输出多行）
+        cleaned = cleaned.split("\n", 1)[0].strip()
+        # 常见前缀清理
+        for prefix in ("标题：", "标题:", "Title:", "title:"):
+            if cleaned.startswith(prefix):
+                cleaned = cleaned[len(prefix):].strip()
+        return cleaned[:20]
 
     @classmethod
     async def create(cls, config, db_manager) -> "AgentLoop":
