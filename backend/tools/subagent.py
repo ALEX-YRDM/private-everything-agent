@@ -16,9 +16,10 @@ from .base import StreamingTool
 
 class SpawnSubAgentsTool(StreamingTool):
 
-    def __init__(self, main_loop):
+    def __init__(self, main_loop, max_concurrency: int = 5):
         # 持有主 AgentLoop 引用，用于创建 SubAgent 实例和访问 session_manager
         self._main_loop = main_loop
+        self._max_concurrency = max(1, max_concurrency)
 
     @property
     def name(self) -> str:
@@ -149,9 +150,15 @@ class SpawnSubAgentsTool(StreamingTool):
                     "error": error_msg,
                 }
 
-        # 并行执行所有子任务
+        # 并行执行所有子任务，用 Semaphore 限制并发上限
+        semaphore = asyncio.Semaphore(self._max_concurrency)
+
+        async def _guarded(t):
+            async with semaphore:
+                return await run_one(t)
+
         raw_results = await asyncio.gather(
-            *[run_one(t) for t in tasks],
+            *[_guarded(t) for t in tasks],
             return_exceptions=True,
         )
 

@@ -311,7 +311,17 @@ class AgentLoop:
                         break
 
                     elif event.type == "error":
-                        yield {"type": "error", "message": event.content or "未知错误"}
+                        from ..utils.errors import classify_error
+                        raw = event.content or "未知错误"
+                        # 用一个假异常构造分类结果（LiteLLM 已把错误变成字符串）
+                        classified = classify_error(Exception(raw))
+                        yield {
+                            "type": "error",
+                            "message": raw,
+                            "category": classified.category,
+                            "retriable": classified.retriable,
+                            "hint": classified.hint,
+                        }
                         return
 
                 if tool_calls_ready:
@@ -496,7 +506,15 @@ class AgentLoop:
             raise
         except Exception as e:
             logger.exception(f"Agent 处理出错: {e}")
-            yield {"type": "error", "message": str(e)}
+            from ..utils.errors import classify_error
+            classified = classify_error(e)
+            yield {
+                "type": "error",
+                "message": str(e),
+                "category": classified.category,
+                "retriable": classified.retriable,
+                "hint": classified.hint,
+            }
         finally:
             # 若提前保存已成功则跳过，否则兜底保存（CancelledError / 异常路径）
             if not _turn_saved:

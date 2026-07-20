@@ -9,6 +9,10 @@ class MemoryManager:
     - 全局极简记忆：跨 session 的用户画像（偏好、技术栈），存入 global_memory.memory_md
     """
 
+    #: AutoCompact 触发时保留最近 N 条未整合消息不参与压缩，
+    #: 避免上下文里丢失当前正在讨论的话题
+    KEEP_RECENT_MESSAGES = 10
+
     def __init__(self, db_manager, context_window_tokens: int = 65536):
         self.db = db_manager
         self.context_window_tokens = context_window_tokens
@@ -37,7 +41,11 @@ class MemoryManager:
             return False
 
         async with lock:
-            old_messages = await self.db.get_unconsolidated_messages(session_id, limit=50)
+            # 拿到所有未整合消息，然后剔除最近 N 条（保留在活跃对话里）
+            all_unconsolidated = await self.db.get_unconsolidated_messages(session_id, limit=200)
+            if len(all_unconsolidated) <= self.KEEP_RECENT_MESSAGES:
+                return False
+            old_messages = all_unconsolidated[: -self.KEEP_RECENT_MESSAGES]
             if not old_messages:
                 return False
 
