@@ -17,8 +17,8 @@ const showScheduler = ref(false)
 const workingDir = computed(() => chat.currentSession?.working_dir || null)
 
 function handleInsertPath(path: string) {
-  // 简单实现：TODO 后续可接入 ChatPanel 输入框
-  navigator.clipboard?.writeText(path).catch(() => {})
+  // 通过 store 广播给 ChatPanel，在输入框末尾追加相对路径
+  chat.requestInsertToInput(path)
 }
 
 onMounted(async () => {
@@ -65,8 +65,8 @@ const TaskNotificationWatcher = defineComponent({
           @insert-path="handleInsertPath"
         />
 
-        <!-- 右上角操作按钮组 -->
-        <div class="top-actions">
+        <!-- 右上角操作按钮组（文件树打开时向左偏移，避免与其重叠） -->
+        <div class="top-actions" :style="{ right: workingDir ? '274px' : '14px' }">
           <NSpace>
             <NTooltip>
               <template #trigger>
@@ -118,5 +118,6 @@ html, body, #app {
   top: 10px;
   right: 14px;
   z-index: 100;
+  transition: right 0.18s ease;
 }
 </style>

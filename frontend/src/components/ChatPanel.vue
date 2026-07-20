@@ -496,12 +496,28 @@ async function submitWorkingDir(dir: string | null) {
 // 加载模板
 loadTemplates()
 
+// 监听 chat.requestInsertToInput：追加路径到输入框末尾
+watch(() => chat.pendingInsert, (v) => {
+  if (!v) return
+  const cur = inputText.value
+  // 在光标位置或末尾插入；这里用最简策略：末尾追加，前后各补空格
+  const needsLeadingSpace = cur.length > 0 && !cur.endsWith(' ') && !cur.endsWith('\n')
+  inputText.value = cur + (needsLeadingSpace ? ' ' : '') + v.text + ' '
+  nextTick(() => {
+    const el = document.querySelector('.message-input textarea') as HTMLTextAreaElement | null
+    el?.focus()
+    if (el) {
+      el.selectionStart = el.selectionEnd = el.value.length
+    }
+  })
+})
+
 // 供 App.vue 顶层监听 workingDir 变化
 defineExpose({ workingDir })
 </script>
 
 <template>
-  <div class="chat-panel">
+  <div class="chat-panel" :class="{ 'has-working-dir': !!workingDir }">
     <!-- 顶部标题栏 -->
     <div class="chat-header">
       <span class="chat-title">
@@ -844,11 +860,15 @@ defineExpose({ workingDir })
 
 .chat-header {
   padding: 14px 20px;
-  padding-right: 100px; /* 为右上角固定按钮组留空 */
+  padding-right: 20px;
   border-bottom: 1px solid #e8e8e8;
   display: flex;
   align-items: center;
   min-height: 52px;
+}
+/* 无工作目录时右上角按钮组悬浮在 chat-header 上方，需要留空 */
+.chat-panel:not(.has-working-dir) .chat-header {
+  padding-right: 100px;
 }
 
 .chat-title {
