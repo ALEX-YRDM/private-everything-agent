@@ -75,20 +75,25 @@ class SpawnSubAgentsTool(StreamingTool):
         self,
         stream_callback,
         tasks: list[dict],
+        _ctx=None,
     ) -> str:
         parent_session_id = getattr(self._main_loop, "_current_session_id", None)
+        parent_ctx = _ctx or getattr(self._main_loop, "_current_ctx", None)
 
         async def run_one(task: dict) -> dict:
             task_id = task["id"]
             task_desc = task["description"]
             allowed_tools: list[str] | None = task.get("tools") or None
 
-            # 1. 为此 SubAgent 创建独立 Session
+            # 1. 为此 SubAgent 创建独立 Session（继承父 working_dir）
             session_id = await self._main_loop.sessions.create_subagent_session(
                 parent_session_id=parent_session_id or "unknown",
                 task_id=task_id,
                 task=task_desc,
             )
+            # 继承父会话的 working_dir，保证 SubAgent 工具解析在同一 cwd
+            if parent_ctx is not None:
+                await self._main_loop.sessions.set_working_dir(session_id, str(parent_ctx.cwd))
 
             # 2. 通知前端 SubAgent 已启动
             stream_callback({
@@ -98,8 +103,9 @@ class SpawnSubAgentsTool(StreamingTool):
                 "task": task_desc,
             })
 
-            # 3. 创建 SubAgent 实例并运行
+            # 3. 创建 SubAgent 实例并运行，注入父 ctx
             sub_loop = self._main_loop.create_subagent_loop(allowed_tools=allowed_tools)
+            sub_loop._current_ctx = parent_ctx
             result = ""
             try:
                 async for event in sub_loop.process_stream(

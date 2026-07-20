@@ -1,6 +1,8 @@
 import json
+import inspect
 import traceback
 from .base import Tool
+from .context import ToolContext
 from loguru import logger
 
 
@@ -103,12 +105,29 @@ class ToolRegistry:
 
     # ── 执行 ────────────────────────────────────────────────────────────────
 
+    def _inject_ctx(self, tool: Tool, params: dict, ctx: ToolContext | None) -> dict:
+        """按工具 execute 签名决定是否注入 _ctx。不接收 _ctx 的工具原样返回 params。"""
+        if ctx is None:
+            return params
+        try:
+            sig = inspect.signature(tool.execute)
+        except (ValueError, TypeError):
+            return params
+        param_names = sig.parameters.keys()
+        # 显式声明 _ctx 或接收 **kwargs 的工具都会拿到 _ctx
+        if "_ctx" in param_names or any(
+            p.kind == inspect.Parameter.VAR_KEYWORD for p in sig.parameters.values()
+        ):
+            return {**params, "_ctx": ctx}
+        return params
+
     async def execute_streaming(
         self,
         name: str,
         params: dict,
         stream_callback,
         session_overrides: dict[str, bool] | None = None,
+        session_ctx: ToolContext | None = None,
     ) -> str:
         """执行 StreamingTool，注入 stream_callback；普通工具退化为 execute。"""
         from .base import StreamingTool as _ST
@@ -121,19 +140,19 @@ class ToolRegistry:
         if errors:
             return f"[参数错误] {'; '.join(errors)}"
         try:
+            call_params = self._inject_ctx(tool, params, session_ctx)
             if isinstance(tool, _ST):
-                result = await tool.execute_streaming(stream_callback, **params)
+                result = await tool.execute_streaming(stream_callback, **call_params)
             else:
-                result = await tool.execute(**params)
-            if len(result) > 10000:
-                result = result[:10000] + f"\n...[结果已截断，共 {len(result)} 字符]"
+                result = await tool.execute(**call_params)
             return result
         except Exception as e:
             import traceback
             return f"[执行错误] {type(e).__name__}: {e}\n{traceback.format_exc()[-500:]}"
 
     async def execute(self, name: str, params: dict,
-                      session_overrides: dict[str, bool] | None = None) -> str:
+                      session_overrides: dict[str, bool] | None = None,
+                      session_ctx: ToolContext | None = None) -> str:
         tool = self._tools.get(name)
         if not tool:
             return f"[错误] 工具 '{name}' 不存在"
@@ -144,9 +163,8 @@ class ToolRegistry:
         if errors:
             return f"[参数错误] {'; '.join(errors)}"
         try:
-            result = await tool.execute(**params)
-            if len(result) > 10000:
-                result = result[:10000] + f"\n...[结果已截断，共 {len(result)} 字符]"
+            call_params = self._inject_ctx(tool, params, session_ctx)
+            result = await tool.execute(**call_params)
             return result
         except Exception as e:
             return f"[执行错误] {type(e).__name__}: {e}\n{traceback.format_exc()[-500:]}"
