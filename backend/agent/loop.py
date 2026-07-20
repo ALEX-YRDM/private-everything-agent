@@ -7,6 +7,7 @@ from ..providers.base import LLMProvider, StreamEvent
 from ..tools.registry import ToolRegistry
 from ..tools.context import ToolContext
 from ..session.manager import SessionManager
+from .confirmer import ConfirmationBroker
 from .context import ContextBuilder
 from .memory import MemoryManager
 
@@ -41,6 +42,7 @@ class AgentLoop:
         max_tokens: int = 4096,
         depth: int = 0,
         allowed_tools: list[str] | None = None,
+        confirm_required_tools: set[str] | None = None,
     ):
         self.provider = provider
         self.workspace = workspace
@@ -52,6 +54,7 @@ class AgentLoop:
         self.max_iterations = max_iterations
         self.temperature = temperature
         self.max_tokens = max_tokens
+        self.confirm_required_tools = confirm_required_tools or set()
         # SubAgent 相关
         self.depth = depth                    # 0=主Agent，1+=SubAgent
         self.allowed_tools = allowed_tools    # 工具白名单（SubAgent 动态指定）
@@ -101,6 +104,58 @@ class AgentLoop:
             logger.warning(f"写入 project_probe 缓存失败: {e}")
         return result
 
+    # ── 确认协议辅助 ─────────────────────────────────────────────────────────
+
+    def _is_trusted(self, tool_name: str, args: dict, ctx: ToolContext | None) -> bool:
+        """判断此次工具调用是否已被会话级信任覆盖。"""
+        if ctx is None:
+            return False
+        if tool_name == "exec":
+            command = str(args.get("command", "")).lstrip()
+            return self.sessions.is_command_trusted(command, ctx.trusted_commands)
+        # 文件类工具：检查 path 是否在 trusted_paths 子树下
+        if not ctx.trusted_paths:
+            return False
+        path = args.get("path")
+        if not path:
+            return False
+        try:
+            from ..tools.filesystem import _PathResolver
+            resolved = _PathResolver.resolve(path, ctx)
+        except Exception:
+            return False
+        return self.sessions.is_path_trusted(str(resolved), ctx.trusted_paths)
+
+    def _build_confirm_payload(self, tool_name: str, args: dict, ctx: ToolContext | None) -> dict:
+        """
+        构造发给前端的 tool_confirm 事件 payload。
+        含 name / args / cwd / why / preview（edit 类补 diff、exec 显示命令+cwd）。
+        """
+        cwd_str = str(ctx.cwd) if ctx else ""
+        payload: dict = {
+            "name": tool_name,
+            "args": args,
+            "cwd": cwd_str,
+        }
+        if tool_name == "exec":
+            cmd = args.get("command", "")
+            payload["why"] = "该工具会在 shell 中执行命令，可能读写文件系统或访问网络。"
+            payload["preview"] = {"kind": "exec", "command": cmd, "cwd": cwd_str}
+            # 前端可以从 preview 里提取 argv[0] 作为默认信任前缀
+            first_token = cmd.strip().split(None, 1)[0] if cmd.strip() else ""
+            payload["suggested_trust_command"] = first_token
+        elif tool_name in ("write_file", "edit_file", "multi_edit"):
+            payload["why"] = "该工具会写入 / 修改文件内容。"
+            payload["preview"] = {"kind": "file", "path": args.get("path")}
+            payload["suggested_trust_path"] = args.get("path")
+        elif tool_name == "apply_patch":
+            payload["why"] = "该工具会按 diff 补丁改动多个文件。"
+            patch = args.get("patch", "")
+            payload["preview"] = {"kind": "patch", "patch": patch[:4000]}
+        else:
+            payload["why"] = "破坏性工具，需要用户确认。"
+        return payload
+
     def create_subagent_loop(self, allowed_tools: list[str] | None = None) -> "AgentLoop":
         """
         创建一个 SubAgent 用的 AgentLoop 实例，共享所有组件但：
@@ -121,9 +176,10 @@ class AgentLoop:
             max_tokens=self.max_tokens,
             depth=self.depth + 1,
             allowed_tools=allowed_tools,
+            confirm_required_tools=self.confirm_required_tools,
         )
 
-    async def process_stream(self, session_id: str, user_content: str, model: str | None = None, images: list[str] | None = None, files: list[dict] | None = None):
+    async def process_stream(self, session_id: str, user_content: str, model: str | None = None, images: list[str] | None = None, files: list[dict] | None = None, confirmer: "ConfirmationBroker | None" = None):
         """
         处理用户消息，以异步生成器方式 yield 事件字典。
 
@@ -131,14 +187,23 @@ class AgentLoop:
         - {"type": "thinking", "content": "..."}          LLM 推理过程
         - {"type": "tool_call", "name": "...", "args": {...}}   工具调用
         - {"type": "tool_result", "name": "...", "content": "..."} 工具结果
+        - {"type": "tool_confirm", "id": ..., "name": ..., "args": ..., ...}  等待用户确认
+        - {"type": "tool_denied", "id": ..., "name": ..., "reason": ...}  用户拒绝
         - {"type": "subagent_start", "subagent_id": "...", "session_id": "...", "task": "..."}
         - {"type": "subagent_event", "subagent_id": "...", "event": {...}}
         - {"type": "subagent_done", "subagent_id": "...", "result": "..."}
         - {"type": "content_delta", "content": "..."}     流式 token
         - {"type": "done", "content": "..."}              完成
         - {"type": "error", "message": "..."}             出错
+
+        confirmer：ConfirmationBroker 实例；破坏性工具执行前 await
+        broker.request(...) 得到用户决策。SubAgent 从父 loop 继承。
         """
         self._current_session_id = session_id
+        self._current_confirmer = confirmer
+        # SubAgent 场景下参数 confirmer 通常为空，从父 loop 继承（由 SpawnSubAgentsTool 注入）
+        if confirmer is None:
+            confirmer = getattr(self, "_inherited_confirmer", None)
 
         is_subagent = self.depth > 0
 
@@ -279,6 +344,55 @@ class AgentLoop:
 
                     for tc in tc_list:
                         tool_obj = self.tools.get_tool(tc["name"])
+
+                        # ── 破坏性工具确认 ────────────────────────────────
+                        # 判定：工具名在 confirm_required_tools 中，且未被会话级
+                        # trusted_paths / trusted_commands 覆盖。
+                        needs_confirm = (
+                            tc["name"] in self.confirm_required_tools
+                            and confirmer is not None
+                        )
+                        if needs_confirm and self._is_trusted(tc["name"], tc["arguments"], ctx):
+                            needs_confirm = False
+
+                        if needs_confirm:
+                            payload = self._build_confirm_payload(
+                                tc["name"], tc["arguments"], ctx,
+                            )
+                            resp = await confirmer.request(tc["id"], payload)
+                            if resp.decision == "deny":
+                                reason = resp.extra or "用户已拒绝"
+                                deny_msg = f"[已拒绝] {reason}"
+                                yield {
+                                    "type": "tool_denied",
+                                    "id": tc["id"],
+                                    "name": tc["name"],
+                                    "reason": reason,
+                                }
+                                # 作为 tool_result 反馈给 LLM，让下一轮知道
+                                tool_msg = {
+                                    "role": "tool",
+                                    "tool_call_id": tc["id"],
+                                    "name": tc["name"],
+                                    "content": deny_msg,
+                                }
+                                messages.append(tool_msg)
+                                new_messages.append(tool_msg)
+                                yield {"type": "tool_result", "id": tc["id"], "name": tc["name"], "content": deny_msg}
+                                continue  # 跳过后续执行
+                            elif resp.decision == "trust_path" and resp.extra:
+                                try:
+                                    await self.sessions.add_trusted_path(session_id, resp.extra)
+                                    ctx.trusted_paths.append(resp.extra)
+                                except Exception as e:
+                                    logger.warning(f"添加信任路径失败: {e}")
+                            elif resp.decision == "trust_command" and resp.extra:
+                                try:
+                                    await self.sessions.add_trusted_command(session_id, resp.extra)
+                                    ctx.trusted_commands.append(resp.extra)
+                                except Exception as e:
+                                    logger.warning(f"添加信任命令失败: {e}")
+                            # allow / trust_path / trust_command 都继续执行
 
                         # 检查是否为 StreamingTool（如 spawn_subagents）
                         from ..tools.base import StreamingTool as _ST
@@ -493,6 +607,7 @@ class AgentLoop:
             max_iterations=config.llm.max_iterations,
             temperature=config.llm.temperature,
             max_tokens=config.llm.max_tokens,
+            confirm_required_tools=set(config.tools.confirm_required_tools),
         )
         return loop
 

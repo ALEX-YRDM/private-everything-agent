@@ -79,6 +79,7 @@ class SpawnSubAgentsTool(StreamingTool):
     ) -> str:
         parent_session_id = getattr(self._main_loop, "_current_session_id", None)
         parent_ctx = _ctx or getattr(self._main_loop, "_current_ctx", None)
+        parent_confirmer = getattr(self._main_loop, "_current_confirmer", None)
 
         async def run_one(task: dict) -> dict:
             task_id = task["id"]
@@ -103,9 +104,10 @@ class SpawnSubAgentsTool(StreamingTool):
                 "task": task_desc,
             })
 
-            # 3. 创建 SubAgent 实例并运行，注入父 ctx
+            # 3. 创建 SubAgent 实例并运行，注入父 ctx / confirmer
             sub_loop = self._main_loop.create_subagent_loop(allowed_tools=allowed_tools)
             sub_loop._current_ctx = parent_ctx
+            sub_loop._inherited_confirmer = parent_confirmer
             result = ""
             try:
                 async for event in sub_loop.process_stream(
