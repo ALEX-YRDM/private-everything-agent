@@ -401,6 +401,7 @@ class AgentLoop:
         """工厂方法：初始化所有组件并返回 AgentLoop 实例。MCP 连接由外部 MCPManager 管理。"""
         from ..providers.litellm_provider import LiteLLMProvider
         from ..tools.filesystem import ReadFileTool, WriteFileTool, EditFileTool, ListDirTool, ReadSkillTool
+        from ..tools.coding import GlobTool, GrepTool, MultiEditTool, ApplyPatchTool
         from ..tools.shell import ExecTool
         from ..tools.web import WebSearchTool, WebFetchTool
 
@@ -430,6 +431,11 @@ class AgentLoop:
         tools.register(EditFileTool())
         tools.register(ListDirTool())
         tools.register(ReadSkillTool(workspace))
+        # 编码工具集（glob/grep/multi_edit/apply_patch）
+        tools.register(GlobTool())
+        tools.register(GrepTool())
+        tools.register(MultiEditTool())
+        tools.register(ApplyPatchTool())
         # ExecTool 保留 default_cwd 兜底（无 ctx 时使用，如老会话）
         tools.register(ExecTool(workspace, config.tools.shell_timeout))
         if config.tools.brave_api_key:
