@@ -36,18 +36,31 @@ class SkillsLoader:
         self._system_cache_time: float = 0
 
     def sync_system_skills(self, workspace: Path) -> None:
-        """启动时将系统 Skills 增量同步到 workspace/.skills_cache/（仅更新有变更的文件）。"""
+        """
+        启动时将系统 Skills 整棵目录树增量同步到 workspace/.skills_cache/。
+        每个 skill 目录（含 SKILL.md 及 references/scripts/assets/ 等子目录）
+        逐文件比较 mtime，仅复制有变更的文件，避免每次启动全量 IO。
+        """
         if not self.system_dir:
             return
         cache_dir = workspace / ".skills_cache"
         cache_dir.mkdir(exist_ok=True)
         for skill_md in self.system_dir.glob("*/SKILL.md"):
-            name = skill_md.parent.name
-            dst = cache_dir / name / "SKILL.md"
-            dst.parent.mkdir(exist_ok=True)
-            # 仅当源文件更新时才复制，避免每次启动全量 IO
-            if not dst.exists() or skill_md.stat().st_mtime > dst.stat().st_mtime:
-                shutil.copy2(skill_md, dst)
+            src_dir = skill_md.parent
+            dst_dir = cache_dir / src_dir.name
+            self._sync_tree(src_dir, dst_dir)
+
+    def _sync_tree(self, src: Path, dst: Path) -> None:
+        """按文件粒度 mtime 比较增量同步整棵目录树。"""
+        dst.mkdir(parents=True, exist_ok=True)
+        for src_file in src.rglob("*"):
+            if src_file.is_dir():
+                continue
+            rel = src_file.relative_to(src)
+            dst_file = dst / rel
+            dst_file.parent.mkdir(parents=True, exist_ok=True)
+            if not dst_file.exists() or src_file.stat().st_mtime > dst_file.stat().st_mtime:
+                shutil.copy2(src_file, dst_file)
 
     def list_system_skills(self, filter_unavailable: bool = True) -> list[SkillInfo]:
         """列出所有系统 Skills（带 TTL 缓存，避免每轮 prompt 构建时重复读取文件系统）。"""
