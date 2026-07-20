@@ -1,6 +1,9 @@
 <script setup lang="ts">
 import { ref, computed } from 'vue'
 import { NButton, NSpace, NTooltip } from 'naive-ui'
+import CodeBlock from './CodeBlock.vue'
+import DiffView from './DiffView.vue'
+import { pickToolPreview } from '../utils/toolPreview'
 import type { PendingConfirm } from '../stores/chat'
 import type { ConfirmDecision } from '../api/websocket'
 
@@ -15,14 +18,20 @@ const expanded = ref(true)
 
 const kind = computed(() => props.confirm.preview?.kind ?? 'file')
 
-const previewText = computed(() => {
+/** 首选走 pickToolPreview，它能把 edit_file 的 old_string/new_string 拼成 diff */
+const argsPreview = computed(() =>
+  pickToolPreview(props.confirm.name, props.confirm.args as Record<string, any>),
+)
+
+/** apply_patch 有后端预生成的 patch 字符串，优先使用 */
+const patchFromBackend = computed(() => {
   const p = props.confirm.preview
-  if (!p) return JSON.stringify(props.confirm.args, null, 2)
-  if (p.kind === 'exec') return `$ ${p.command}`
-  if (p.kind === 'file') return JSON.stringify(props.confirm.args, null, 2)
-  if (p.kind === 'patch') return p.patch
-  return JSON.stringify(props.confirm.args, null, 2)
+  return p?.kind === 'patch' ? p.patch : ''
 })
+
+const fileArgsJson = computed(() =>
+  JSON.stringify(props.confirm.args, null, 2),
+)
 
 const icon = computed(() => {
   if (kind.value === 'exec') return '⚡'
@@ -61,7 +70,23 @@ function decide(d: ConfirmDecision, extra?: string) {
         <span class="cc-cwd-label">目录</span>
         <code>{{ confirm.cwd }}</code>
       </div>
-      <pre class="cc-preview">{{ previewText }}</pre>
+
+      <!-- apply_patch：优先使用后端 preview.patch -->
+      <DiffView v-if="patchFromBackend" :patch="patchFromBackend" />
+
+      <!-- edit_file / multi_edit：拼 diff -->
+      <DiffView v-else-if="argsPreview?.kind === 'diff'" :patch="argsPreview.patch" />
+
+      <!-- write_file / exec：语法高亮 -->
+      <CodeBlock
+        v-else-if="argsPreview?.kind === 'code'"
+        :code="argsPreview.code"
+        :lang="argsPreview.lang"
+        :filename="argsPreview.filename"
+      />
+
+      <!-- 兜底：格式化 JSON -->
+      <CodeBlock v-else :code="fileArgsJson" lang="json" />
     </div>
 
     <div class="cc-actions">
@@ -218,22 +243,6 @@ function decide(d: ConfirmDecision, extra?: string) {
   border-radius: 4px;
   font-size: 11px;
   word-break: break-all;
-}
-
-.cc-preview {
-  margin: 6px 0 0;
-  font-family: 'SF Mono', 'Monaco', 'Cascadia Code', monospace;
-  font-size: 12px;
-  color: #1f2937;
-  background: #f9fafb;
-  border: 1px solid #e5e7eb;
-  border-radius: 6px;
-  padding: 8px 10px;
-  white-space: pre-wrap;
-  word-break: break-word;
-  max-height: 280px;
-  overflow-y: auto;
-  line-height: 1.5;
 }
 
 .cc-actions {

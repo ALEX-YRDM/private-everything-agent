@@ -1,7 +1,10 @@
 <script setup lang="ts">
 import { ref, computed } from 'vue'
 import { useMessage } from 'naive-ui'
+import CodeBlock from './CodeBlock.vue'
+import DiffView from './DiffView.vue'
 import { copyToClipboard } from '../utils/clipboard'
+import { pickToolPreview } from '../utils/toolPreview'
 import type { ToolCallDisplay } from '../stores/chat'
 
 const props = defineProps<{
@@ -42,7 +45,11 @@ const toolIcon: Record<string, string> = {
   read_file: '📄',
   write_file: '✏️',
   edit_file: '🔧',
+  multi_edit: '🔧',
+  apply_patch: '🩹',
   list_dir: '📁',
+  glob: '🔎',
+  grep: '🔍',
   exec: '⚡',
   web_search: '🔍',
   web_fetch: '🌐',
@@ -53,6 +60,33 @@ const icon = computed(() => {
     if (props.toolCall.name.includes(key)) return toolIcon[key]
   }
   return '🔧'
+})
+
+const targetPath = computed<string | undefined>(() => {
+  const args = props.toolCall.args as Record<string, unknown> | undefined
+  const p = args?.path ?? args?.file_path
+  return typeof p === 'string' ? p : undefined
+})
+
+/** 参数区的智能展示：edit/multi_edit → diff，write_file/exec → 高亮 code */
+const argsPreview = computed(() =>
+  pickToolPreview(props.toolCall.name, props.toolCall.args as Record<string, any>),
+)
+
+/** 结果区展示：apply_patch/multi_edit 返回内容有时也是 diff；否则按 filename 高亮 */
+const resultView = computed<'diff' | 'code'>(() => {
+  if (!props.result) return 'code'
+  const name = props.toolCall.name
+  if (name.includes('apply_patch')) return 'diff'
+  if (props.result.startsWith('--- ') && props.result.includes('\n+++ ')) return 'diff'
+  return 'code'
+})
+
+const resultLang = computed<string | undefined>(() => {
+  const name = props.toolCall.name
+  if (name === 'exec') return 'bash'
+  if (name === 'grep' || name === 'glob' || name.includes('list_dir')) return 'plaintext'
+  return undefined
 })
 </script>
 
@@ -66,10 +100,37 @@ const icon = computed(() => {
     </div>
     <div v-if="expanded" class="tool-body">
       <div class="tool-args">
-        <div class="section-label">参数</div>
-        <!-- 流式生成阶段显示原始文本，生成完毕后显示格式化 JSON -->
+        <div class="section-label">
+          参数
+          <span v-if="targetPath" class="tool-target-path" :title="targetPath">📁 {{ targetPath }}</span>
+        </div>
+
+        <!-- 参数流式生成中：显示原文 -->
         <pre v-if="toolCall.streamingArgs !== undefined">{{ toolCall.streamingArgs }}<span class="cursor-blink">▋</span></pre>
-        <pre v-else>{{ JSON.stringify(toolCall.args, null, 2) }}</pre>
+
+        <!-- edit_file / multi_edit / apply_patch → diff -->
+        <DiffView
+          v-else-if="argsPreview?.kind === 'diff'"
+          :patch="argsPreview.patch"
+          max-height="360px"
+        />
+
+        <!-- write_file / exec → 语法高亮 -->
+        <CodeBlock
+          v-else-if="argsPreview?.kind === 'code'"
+          :code="argsPreview.code"
+          :lang="argsPreview.lang"
+          :filename="argsPreview.filename"
+          max-height="360px"
+        />
+
+        <!-- 其他：格式化 JSON 展示 -->
+        <CodeBlock
+          v-else
+          :code="JSON.stringify(toolCall.args, null, 2)"
+          lang="json"
+          max-height="200px"
+        />
       </div>
       <div v-if="result !== undefined" class="tool-result">
         <div class="result-header">
@@ -78,11 +139,18 @@ const icon = computed(() => {
             class="copy-result-btn"
             :class="{ copied: justCopied }"
             type="button"
-            title="复制结果"
+            title="复制结果（原始文本）"
             @click="copyResult"
           >📋</button>
         </div>
-        <pre>{{ result }}</pre>
+        <DiffView v-if="resultView === 'diff'" :patch="result" max-height="360px" />
+        <CodeBlock
+          v-else
+          :code="result"
+          :lang="resultLang"
+          :filename="targetPath"
+          max-height="360px"
+        />
       </div>
     </div>
   </div>
@@ -174,6 +242,25 @@ const icon = computed(() => {
   text-transform: uppercase;
   letter-spacing: 0.5px;
   margin-bottom: 4px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.tool-target-path {
+  font-family: 'SF Mono', 'Monaco', monospace;
+  font-size: 11px;
+  font-weight: 400;
+  color: #6b7280;
+  text-transform: none;
+  letter-spacing: 0;
+  background: #f3f4f6;
+  padding: 1px 6px;
+  border-radius: 4px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 260px;
 }
 
 .result-header {
