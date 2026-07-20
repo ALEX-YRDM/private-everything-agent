@@ -12,13 +12,18 @@ class SessionManager:
         self.db = db_manager
         self.max_history = max_history_messages
 
-    async def create_session(self, title: str = "新会话", model: str = None, parent_id: str = None) -> dict:
+    async def create_session(self, title: str = "新会话", model: str = None,
+                             parent_id: str = None, working_dir: str = None) -> dict:
         session_id = str(uuid.uuid4())
         await self.db.execute(
-            "INSERT INTO sessions (id, title, model, parent_id) VALUES (?, ?, ?, ?)",
-            (session_id, title, model, parent_id),
+            "INSERT INTO sessions (id, title, model, parent_id, working_dir) VALUES (?, ?, ?, ?, ?)",
+            (session_id, title, model, parent_id, working_dir),
         )
-        return {"id": session_id, "title": title, "model": model, "parent_id": parent_id, "created_at": datetime.now().isoformat()}
+        return {
+            "id": session_id, "title": title, "model": model,
+            "parent_id": parent_id, "working_dir": working_dir,
+            "created_at": datetime.now().isoformat(),
+        }
 
     async def get_session(self, session_id: str) -> dict | None:
         return await self.db.fetch_one("SELECT * FROM sessions WHERE id = ?", (session_id,))
@@ -65,6 +70,67 @@ class SessionManager:
             "UPDATE sessions SET title = ? WHERE id = ?", (title, session_id)
         )
         return cursor.rowcount > 0
+
+    async def set_working_dir(self, session_id: str, working_dir: str | None) -> bool:
+        cursor = await self.db.execute(
+            "UPDATE sessions SET working_dir = ? WHERE id = ?",
+            (working_dir, session_id),
+        )
+        return cursor.rowcount > 0
+
+    async def get_trusts(self, session_id: str) -> dict:
+        """返回 {paths: [...], commands: [...]}，缺失字段返回空列表。"""
+        meta = await self.db.get_session_metadata(session_id)
+        return {
+            "paths": list(meta.get("trusted_paths") or []),
+            "commands": list(meta.get("trusted_commands") or []),
+        }
+
+    async def add_trusted_path(self, session_id: str, path: str) -> None:
+        meta = await self.db.get_session_metadata(session_id)
+        paths = set(meta.get("trusted_paths") or [])
+        paths.add(path)
+        meta["trusted_paths"] = sorted(paths)
+        await self.db.set_session_metadata(session_id, meta)
+
+    async def remove_trusted_path(self, session_id: str, path: str) -> None:
+        meta = await self.db.get_session_metadata(session_id)
+        paths = set(meta.get("trusted_paths") or [])
+        paths.discard(path)
+        meta["trusted_paths"] = sorted(paths)
+        await self.db.set_session_metadata(session_id, meta)
+
+    async def add_trusted_command(self, session_id: str, prefix: str) -> None:
+        meta = await self.db.get_session_metadata(session_id)
+        cmds = set(meta.get("trusted_commands") or [])
+        cmds.add(prefix)
+        meta["trusted_commands"] = sorted(cmds)
+        await self.db.set_session_metadata(session_id, meta)
+
+    async def remove_trusted_command(self, session_id: str, prefix: str) -> None:
+        meta = await self.db.get_session_metadata(session_id)
+        cmds = set(meta.get("trusted_commands") or [])
+        cmds.discard(prefix)
+        meta["trusted_commands"] = sorted(cmds)
+        await self.db.set_session_metadata(session_id, meta)
+
+    def is_path_trusted(self, path: str, trusted_paths: list[str]) -> bool:
+        """path 位于任一 trusted_path 子树下则返回 True（含相等）。"""
+        from pathlib import Path
+        p = Path(path).resolve()
+        for t in trusted_paths:
+            try:
+                tp = Path(t).resolve()
+                p.relative_to(tp)
+                return True
+            except ValueError:
+                continue
+        return False
+
+    def is_command_trusted(self, command: str, trusted_commands: list[str]) -> bool:
+        """command 以任一 trusted_commands 前缀开头则返回 True。"""
+        stripped = command.lstrip()
+        return any(stripped.startswith(prefix) for prefix in trusted_commands)
 
     async def get_history(self, session_id: str) -> list[dict]:
         """
