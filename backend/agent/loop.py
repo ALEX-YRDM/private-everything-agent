@@ -75,6 +75,32 @@ class AgentLoop:
             trusted_commands=list(session_meta.get("trusted_commands") or []),
         )
 
+    async def _get_or_probe(
+        self, session_id: str, working_dir: Path | None, session_meta: dict,
+    ) -> dict | None:
+        """
+        懒加载项目探测：缓存命中且 cwd 未变则复用；否则重新探测并写回 metadata。
+        无 working_dir（老会话）则返回 None。
+        """
+        if not working_dir:
+            return None
+        cached = session_meta.get("project_probe") or {}
+        if cached.get("cwd") == str(working_dir):
+            return cached
+        try:
+            from .project_probe import probe as _probe
+            result = await _probe(working_dir)
+        except Exception as e:
+            logger.warning(f"project_probe 失败（非致命）: {e}")
+            return cached or None
+        # 写回 metadata（不阻塞，但也不需要等待）
+        new_meta = {**session_meta, "project_probe": result}
+        try:
+            await self.memory.db.set_session_metadata(session_id, new_meta)
+        except Exception as e:
+            logger.warning(f"写入 project_probe 缓存失败: {e}")
+        return result
+
     def create_subagent_loop(self, allowed_tools: list[str] | None = None) -> "AgentLoop":
         """
         创建一个 SubAgent 用的 AgentLoop 实例，共享所有组件但：
@@ -140,8 +166,11 @@ class AgentLoop:
             session_overrides = session_meta.get("tool_overrides", {})
             effective_model = model or session_model or self.model
             ctx = self._build_tool_ctx(session_id, session_row, session_meta)
-            project_probe = session_meta.get("project_probe") or None
             main_working_dir = ctx.cwd if (session_row or {}).get("working_dir") else None
+            # 项目探测缓存：绑定到 cwd，cwd 变更时重新探测
+            project_probe = await self._get_or_probe(
+                session_id, main_working_dir, session_meta,
+            )
             messages = await self.context.build_messages(
                 history, user_content, session_id,
                 images=images, files=files,
