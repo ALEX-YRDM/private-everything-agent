@@ -20,8 +20,18 @@ class ContextBuilder:
         self.memory = memory_manager
         self.db = db_manager
 
-    async def build_system_prompt(self, session_id: str) -> str:
-        """构建 System Prompt（静态部分 + 动态记忆）。"""
+    async def build_system_prompt(
+        self,
+        session_id: str,
+        working_dir: Path | None = None,
+        project_probe: dict | None = None,
+    ) -> str:
+        """
+        构建 System Prompt（静态部分 + 动态记忆 + 可选 cwd 简报）。
+
+        working_dir：会话绑定的工作目录（None 则默认为 workspace）。
+        project_probe：项目探测结果，含 language/framework/git 等；None 则跳过。
+        """
         parts = []
 
         agents_md = self.config_dir / "AGENTS.md"
@@ -35,6 +45,24 @@ class ContextBuilder:
             f = self.config_dir / fname
             if f.exists():
                 parts.append(f"## {fname}\n{f.read_text(encoding='utf-8')}")
+
+        # 项目级 AGENTS.md（若存在于 working_dir，且与全局 config_dir 不同）：
+        # 追加而不替换全局
+        if working_dir and working_dir.resolve() != self.config_dir.resolve():
+            for fname in ("AGENTS.md", "CLAUDE.md"):
+                proj_md = working_dir / fname
+                if proj_md.exists() and proj_md.is_file():
+                    try:
+                        content = proj_md.read_text(encoding="utf-8")
+                        parts.append(f"## 项目 {fname}（{working_dir.name}）\n{content}")
+                    except Exception:
+                        pass
+                    break  # 优先 AGENTS.md；不同时注入两份
+
+        # 工作目录简报
+        cwd_briefing = self._build_cwd_briefing(working_dir, project_probe)
+        if cwd_briefing:
+            parts.append(cwd_briefing)
 
         session_summary = await self._get_session_summary(session_id)
         if session_summary:
@@ -55,6 +83,31 @@ class ContextBuilder:
         base_prompt = f"{base_prompt}\n\n---当前日期：{session_date}\n\n"
 
         return base_prompt
+
+    def _build_cwd_briefing(self, working_dir: Path | None, probe: dict | None) -> str:
+        """生成 '## 当前工作目录' 简报，包含 cwd、语言/框架、git 分支。"""
+        if not working_dir:
+            return ""
+        lines = ["## 当前工作目录", f"路径：{working_dir}"]
+        if probe:
+            for label, key in [
+                ("语言", "language"),
+                ("框架", "framework"),
+                ("包管理", "package_manager"),
+                ("测试命令", "test_cmd"),
+                ("构建命令", "build_cmd"),
+                ("启动命令", "dev_cmd"),
+            ]:
+                val = probe.get(key)
+                if val:
+                    lines.append(f"{label}：{val}")
+            git = probe.get("git") or {}
+            branch = git.get("branch")
+            dirty = git.get("dirty")
+            if branch is not None:
+                dirty_hint = f"（{dirty} 个文件修改）" if dirty else ""
+                lines.append(f"Git：{branch}{dirty_hint}")
+        return "\n".join(lines)
 
     async def _get_session_summary(self, session_id: str) -> str:
         """读取会话级 AutoCompact 摘要。"""
@@ -94,9 +147,11 @@ class ContextBuilder:
         session_id: str,
         images: list[str] | None = None,
         files: list[dict] | None = None,
+        working_dir: Path | None = None,
+        project_probe: dict | None = None,
     ) -> list[dict]:
         """组合完整消息列表：system + 历史 + 当前消息。"""
-        system_prompt = await self.build_system_prompt(session_id)
+        system_prompt = await self.build_system_prompt(session_id, working_dir, project_probe)
 
         # 构建完整的用户消息内容，包括文件（不包含时间戳以保持缓存一致性）
         full_content = user_content
@@ -132,12 +187,20 @@ class ContextBuilder:
             + self._operational_rules()
         )
 
-    async def build_subagent_messages(self, task: str) -> list[dict]:
+    async def build_subagent_messages(
+        self,
+        task: str,
+        working_dir: Path | None = None,
+        project_probe: dict | None = None,
+    ) -> list[dict]:
         """
         为 SubAgent 构建精简的消息列表。
-        SubAgent 专注于单一子任务，不需要完整的身份/记忆/Skills 上下文。
+        SubAgent 专注于单一子任务，不需要完整的身份/记忆，但仍附加：
+        - 精简的操作规范
+        - cwd 简报（若父会话有 working_dir）
+        - Skills 摘要（供 SubAgent 按需 read_skill）
         """
-        system = (
+        parts = [
             "你是一个专注的子代理（SubAgent），负责高效完成指定的子任务。\n\n"
             "## 工作原则\n"
             "- 专注于完成分配的单一任务，不做额外的事情\n"
@@ -145,7 +208,17 @@ class ContextBuilder:
             "- 完成后输出清晰、结构化的结论，供主代理使用\n"
             "- 遇到问题时尝试替代方案，不要无限重试同一操作\n\n"
             + self._operational_rules()
-        )
+        ]
+
+        cwd_briefing = self._build_cwd_briefing(working_dir, project_probe)
+        if cwd_briefing:
+            parts.append(cwd_briefing)
+
+        skills_summary = self.skills.build_skills_summary()
+        if skills_summary:
+            parts.append(skills_summary)
+
+        system = "\n\n---\n\n".join(parts)
         return [
             {"role": "system", "content": system},
             {"role": "user", "content": task},

@@ -117,13 +117,17 @@ class AgentLoop:
         is_subagent = self.depth > 0
 
         if is_subagent:
-            # SubAgent：简洁上下文，无历史，无记忆
-            messages = await self.context.build_subagent_messages(user_content)
+            # SubAgent：简洁上下文，无历史，无记忆；从父 ctx 继承 cwd
             session_overrides: dict[str, bool] = {}
             effective_model = model or self.model
             should_generate_title = False
-            # SubAgent 继承父 ctx（由 SpawnSubAgentsTool 通过 _inherited_ctx 传入）
             ctx = self._current_ctx
+            sub_working_dir = ctx.cwd if ctx else None
+            # SubAgent 场景下没有 session_meta，project_probe 若在父会话里可以额外传，
+            # 但当前只需 cwd 简报即可
+            messages = await self.context.build_subagent_messages(
+                user_content, working_dir=sub_working_dir,
+            )
         else:
             # 主 Agent：完整上下文
             history, session_row, session_meta = await asyncio.gather(
@@ -135,8 +139,14 @@ class AgentLoop:
             session_model = (session_row or {}).get("model") or None
             session_overrides = session_meta.get("tool_overrides", {})
             effective_model = model or session_model or self.model
-            messages = await self.context.build_messages(history, user_content, session_id, images=images, files=files)
             ctx = self._build_tool_ctx(session_id, session_row, session_meta)
+            project_probe = session_meta.get("project_probe") or None
+            main_working_dir = ctx.cwd if (session_row or {}).get("working_dir") else None
+            messages = await self.context.build_messages(
+                history, user_content, session_id,
+                images=images, files=files,
+                working_dir=main_working_dir, project_probe=project_probe,
+            )
 
         self._current_ctx = ctx
 
