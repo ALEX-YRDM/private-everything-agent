@@ -530,35 +530,36 @@ defineExpose({ workingDir })
       <div class="header-actions">
         <NTooltip v-if="chat.currentSession">
           <template #trigger>
-            <NButton
-              size="tiny"
-              quaternary
-              :type="workingDir ? 'primary' : 'default'"
+            <button
+              class="chip"
+              :class="{ active: !!workingDir }"
               @click="showWorkingDirPicker = true"
             >
-              🗂 {{ workingDirLabel }}
-            </NButton>
+              <span class="chip-emoji">🗂</span>
+              <span class="chip-text">{{ workingDirLabel }}</span>
+            </button>
           </template>
           {{ workingDir ? `会话工作目录：${workingDir}` : '点击设置会话工作目录（AI 编码模式）' }}
         </NTooltip>
         <NTooltip v-if="contextUsage" placement="bottom">
           <template #trigger>
-            <span class="context-usage" :class="{ warn: contextUsage.pct >= 60, danger: contextUsage.pct >= 80 }">
-              上下文 {{ contextUsage.pct }}%
+            <span class="chip context-usage" :class="{ warn: contextUsage.pct >= 60, danger: contextUsage.pct >= 80 }">
+              <span class="chip-emoji">📊</span>
+              <span class="chip-text">{{ contextUsage.pct }}%</span>
             </span>
           </template>
-          已使用 {{ contextUsage.used.toLocaleString() }} / {{ contextUsage.total.toLocaleString() }} tokens（{{ contextUsage.pct }}%）
+          已使用 {{ contextUsage.used.toLocaleString() }} / {{ contextUsage.total.toLocaleString() }} tokens
         </NTooltip>
         <span class="header-divider" />
         <NTooltip>
           <template #trigger>
-            <NButton circle size="small" @click="openScheduler">⏰</NButton>
+            <button class="icon-btn" @click="openScheduler">⏰</button>
           </template>
           定时任务
         </NTooltip>
         <NTooltip>
           <template #trigger>
-            <NButton circle size="small" @click="openSettings">⚙️</NButton>
+            <button class="icon-btn" @click="openSettings">⚙️</button>
           </template>
           系统设置
         </NTooltip>
@@ -878,10 +879,11 @@ defineExpose({ workingDir })
 
 .chat-header {
   padding: 10px 16px;
-  border-bottom: 1px solid #e8e8e8;
+  border-bottom: 1px solid #ececec;
+  background: white;
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: 10px;
   min-height: 52px;
 }
 
@@ -895,15 +897,15 @@ defineExpose({ workingDir })
 
 .header-divider {
   width: 1px;
-  height: 18px;
-  background: #e8e8e8;
-  margin: 0 2px;
+  height: 16px;
+  background: #e5e7eb;
+  margin: 0 4px;
 }
 
 .chat-title {
   font-weight: 600;
   font-size: 15px;
-  color: #1a1a1a;
+  color: #1f2937;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -911,29 +913,78 @@ defineExpose({ workingDir })
   min-width: 0;
 }
 
-.context-usage {
+/* 通用 chip 样式（工作目录、上下文百分比等） */
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  border: 1px solid #e5e7eb;
+  background: #f9fafb;
+  color: #6b7280;
+  border-radius: 999px;
+  padding: 3px 10px 3px 8px;
   font-size: 12px;
-  color: #52c41a;
-  background: #f6ffed;
-  border: 1px solid #b7eb8f;
-  border-radius: 10px;
-  padding: 2px 8px;
+  line-height: 18px;
+  cursor: pointer;
+  transition: border-color 0.15s, background 0.15s, color 0.15s;
   white-space: nowrap;
-  cursor: default;
   flex-shrink: 0;
+  max-width: 220px;
 }
+.chip:hover {
+  border-color: #cbd5e1;
+  background: white;
+  color: #374151;
+}
+.chip.active {
+  color: #1677ff;
+  background: #eef4ff;
+  border-color: #bfd4ff;
+}
+.chip-emoji { font-size: 11px; line-height: 1; }
+.chip-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 180px;
+}
+
+.context-usage {
+  color: #16a34a;
+  background: #f0fdf4;
+  border-color: #bbf7d0;
+  cursor: default;
+}
+.context-usage:hover { background: #f0fdf4; color: #16a34a; border-color: #bbf7d0; }
 
 .context-usage.warn {
-  color: #d46b08;
-  background: #fff7e6;
-  border-color: #ffd591;
+  color: #b45309;
+  background: #fffbeb;
+  border-color: #fde68a;
 }
+.context-usage.warn:hover { background: #fffbeb; color: #b45309; border-color: #fde68a; }
 
 .context-usage.danger {
-  color: #cf1322;
-  background: #fff1f0;
-  border-color: #ffa39e;
+  color: #b91c1c;
+  background: #fef2f2;
+  border-color: #fecaca;
 }
+.context-usage.danger:hover { background: #fef2f2; color: #b91c1c; border-color: #fecaca; }
+
+/* icon 按钮（⏰ ⚙️） */
+.icon-btn {
+  width: 30px;
+  height: 30px;
+  border-radius: 8px;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  font-size: 15px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 0.15s;
+}
+.icon-btn:hover { background: #f3f4f6; }
 
 .messages-area { flex: 1; }
 .messages-container { padding: 16px 20px; min-height: 100%; }

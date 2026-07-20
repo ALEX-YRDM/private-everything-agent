@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import { ref, watch } from 'vue'
-import { NModal, NInput, NButton, NSpace, NTag, useMessage } from 'naive-ui'
+import { ref, watch, computed } from 'vue'
+import { NModal, NInput, NButton, NSpace, useMessage } from 'naive-ui'
 
 const props = defineProps<{
   show: boolean
@@ -8,7 +8,7 @@ const props = defineProps<{
 }>()
 const emit = defineEmits<{
   'update:show': [v: boolean]
-  'submit': [dir: string | null]
+  submit: [dir: string | null]
 }>()
 
 const message = useMessage()
@@ -39,32 +39,39 @@ function addToRecent(dir: string) {
   } catch {}
 }
 
-watch(() => props.show, (v) => {
-  if (v) {
-    input.value = props.currentDir || ''
-    loadRecent()
-  }
-})
+watch(
+  () => props.show,
+  (v) => {
+    if (v) {
+      input.value = props.currentDir || ''
+      loadRecent()
+    }
+  },
+)
 
 function pickRecent(dir: string) {
   input.value = dir
 }
 
+const isValid = computed(() => {
+  const v = input.value.trim()
+  return !v || v.startsWith('/') || v.startsWith('~')
+})
+
 async function apply() {
-  saving.value = true
   const value = input.value.trim()
-  if (value && !value.startsWith('/') && !value.startsWith('~')) {
+  if (value && !isValid.value) {
     message.warning('请填写绝对路径（以 / 或 ~ 开头）')
-    saving.value = false
     return
   }
+  saving.value = true
   const dir = value || null
   if (dir) addToRecent(dir)
   emit('submit', dir)
   saving.value = false
 }
 
-function clear() {
+function reset() {
   emit('submit', null)
 }
 </script>
@@ -75,42 +82,55 @@ function clear() {
     @update:show="emit('update:show', $event)"
     preset="card"
     title="设置会话工作目录"
-    :style="{ width: '520px' }"
+    :style="{ width: '560px' }"
   >
-    <div class="picker-body">
-      <p class="hint">
-        指定此会话的工作目录，Agent 的文件工具与 shell 命令都会以此为 cwd。
-        留空可回落到全局 workspace（默认行为）。
+    <div class="wdp-body">
+      <p class="wdp-hint">
+        选定的目录会作为此会话所有文件工具与 shell 命令的 <code>cwd</code>，
+        并激活右侧的项目文件树。留空回落到全局 workspace。
       </p>
-      <NInput
-        v-model:value="input"
-        placeholder="/Users/xxx/code/my-project"
-        clearable
-        @keydown.enter="apply"
-      />
 
-      <div v-if="recent.length" class="section">
-        <div class="section-label">最近使用</div>
-        <NSpace vertical size="small">
-          <NTag
+      <div class="wdp-input-wrap">
+        <NInput
+          v-model:value="input"
+          size="medium"
+          placeholder="/Users/xxx/code/my-project"
+          clearable
+          :status="isValid ? undefined : 'error'"
+          @keydown.enter="apply"
+        >
+          <template #prefix>
+            <span class="wdp-input-prefix">🗂</span>
+          </template>
+        </NInput>
+        <div v-if="!isValid" class="wdp-error">路径需以 / 或 ~ 开头</div>
+      </div>
+
+      <div v-if="recent.length" class="wdp-section">
+        <div class="wdp-section-label">最近使用</div>
+        <div class="wdp-recent-list">
+          <button
             v-for="dir in recent"
             :key="dir"
-            :bordered="false"
-            class="recent-tag"
+            class="wdp-recent-item"
+            :class="{ active: dir === input }"
             @click="pickRecent(dir)"
           >
-            {{ dir }}
-          </NTag>
-        </NSpace>
+            <span class="wdp-recent-icon">📁</span>
+            <span class="wdp-recent-path">{{ dir }}</span>
+          </button>
+        </div>
       </div>
     </div>
 
     <template #footer>
       <NSpace justify="space-between">
-        <NButton size="small" @click="clear">回落到 workspace</NButton>
+        <NButton size="small" quaternary @click="reset">回落到 workspace</NButton>
         <NSpace>
           <NButton @click="emit('update:show', false)">取消</NButton>
-          <NButton type="primary" :loading="saving" @click="apply">应用</NButton>
+          <NButton type="primary" :loading="saving" :disabled="!isValid" @click="apply">
+            应用
+          </NButton>
         </NSpace>
       </NSpace>
     </template>
@@ -118,36 +138,81 @@ function clear() {
 </template>
 
 <style scoped>
-.picker-body {
+.wdp-body {
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 16px;
 }
-.hint {
-  color: #888;
-  font-size: 12px;
+
+.wdp-hint {
+  color: #6b7280;
+  font-size: 12.5px;
   margin: 0;
   line-height: 1.6;
 }
-.section {
-  margin-top: 4px;
+.wdp-hint code {
+  font-family: 'SF Mono', 'Monaco', monospace;
+  background: #f3f4f6;
+  padding: 1px 5px;
+  border-radius: 3px;
+  font-size: 12px;
 }
-.section-label {
+
+.wdp-input-prefix {
+  font-size: 14px;
+  margin-right: 2px;
+}
+.wdp-error {
+  font-size: 11.5px;
+  color: #dc2626;
+  margin-top: 4px;
+  padding-left: 2px;
+}
+
+.wdp-section-label {
   font-size: 11px;
   font-weight: 600;
-  color: #888;
+  color: #9ca3af;
   text-transform: uppercase;
   letter-spacing: 0.5px;
-  margin-bottom: 6px;
+  margin-bottom: 8px;
 }
-.recent-tag {
+
+.wdp-recent-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.wdp-recent-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  border: 1px solid transparent;
+  background: #f9fafb;
+  border-radius: 6px;
   cursor: pointer;
   font-family: 'SF Mono', 'Monaco', monospace;
   font-size: 12px;
-  transition: background 0.15s;
+  color: #374151;
+  text-align: left;
+  transition: background 0.15s, border-color 0.15s;
 }
-.recent-tag:hover {
-  background: #e6f0ff;
-  color: #1677ff;
+.wdp-recent-item:hover {
+  background: white;
+  border-color: #cbd5e1;
+}
+.wdp-recent-item.active {
+  background: #eef4ff;
+  border-color: #bfd4ff;
+  color: #1e40af;
+}
+
+.wdp-recent-icon { flex-shrink: 0; }
+.wdp-recent-path {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 </style>
