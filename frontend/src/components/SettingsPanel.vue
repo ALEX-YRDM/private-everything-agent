@@ -8,6 +8,7 @@ import ToolsTab from './settings/ToolsTab.vue'
 import MCPTab from './settings/MCPTab.vue'
 import SkillsTab from './settings/SkillsTab.vue'
 import TemplatesTab from './settings/TemplatesTab.vue'
+import TrustsTab from './settings/TrustsTab.vue'
 
 const settings = useSettingsStore()
 </script>
@@ -41,6 +42,9 @@ const settings = useSettingsStore()
         </NTabPane>
         <NTabPane name="templates" tab="📋 模板">
           <TemplatesTab />
+        </NTabPane>
+        <NTabPane name="trusts" tab="🛡 信任">
+          <TrustsTab />
         </NTabPane>
       </NTabs>
     </NDrawerContent>
