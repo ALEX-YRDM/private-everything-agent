@@ -15,7 +15,10 @@ const emit = defineEmits<{
 const message = useMessage()
 const root = ref<string>('')
 const nodes = ref<FileNode[]>([])
+/** 已展开路径集合。用 Set + 每次替换新引用来触发 Vue reactivity。 */
 const expanded = ref<Set<string>>(new Set())
+/** path → children[] 的独立缓存，与 nodes 树结构解耦，方便触发响应式。 */
+const childrenByPath = ref<Record<string, FileNode[]>>({})
 const loading = ref(false)
 const loadingPaths = ref<Set<string>>(new Set())
 
@@ -29,6 +32,8 @@ async function loadRoot() {
     const data = await api.sessions.listFiles(props.sessionId, '', 1)
     root.value = data.root
     nodes.value = data.entries
+    childrenByPath.value = {}
+    expanded.value = new Set()
   } catch (e: any) {
     message.error(`加载文件树失败: ${e?.message || e}`)
     nodes.value = []
@@ -37,35 +42,42 @@ async function loadRoot() {
   }
 }
 
-async function toggleDir(node: FileNode) {
-  if (node.type !== 'dir') {
+async function onNodeClick(node: FileNode) {
+  if (node.type === 'file') {
     emit('insert-path', node.path)
     return
   }
-  if (expanded.value.has(node.path)) {
-    expanded.value.delete(node.path)
+  // 目录：切换展开状态
+  const nextExpanded = new Set(expanded.value)
+  if (nextExpanded.has(node.path)) {
+    nextExpanded.delete(node.path)
+    expanded.value = nextExpanded
     return
   }
-  expanded.value.add(node.path)
-  if (!node.children && props.sessionId) {
-    loadingPaths.value.add(node.path)
+  nextExpanded.add(node.path)
+  expanded.value = nextExpanded
+
+  // 首次展开：拉取子节点
+  if (!childrenByPath.value[node.path] && props.sessionId) {
+    const nextLoading = new Set(loadingPaths.value)
+    nextLoading.add(node.path)
+    loadingPaths.value = nextLoading
     try {
       const data = await api.sessions.listFiles(props.sessionId, node.path, 1)
-      node.children = data.entries
+      childrenByPath.value = { ...childrenByPath.value, [node.path]: data.entries }
     } catch (e: any) {
       message.warning(`加载失败: ${e?.message || e}`)
     } finally {
-      loadingPaths.value.delete(node.path)
+      const done = new Set(loadingPaths.value)
+      done.delete(node.path)
+      loadingPaths.value = done
     }
   }
 }
 
 watch(
   () => [props.sessionId, props.workingDir],
-  () => {
-    expanded.value.clear()
-    loadRoot()
-  },
+  () => loadRoot(),
   { immediate: true },
 )
 
@@ -107,7 +119,8 @@ const displayRoot = computed(() => {
           :depth="0"
           :expanded="expanded"
           :loading-paths="loadingPaths"
-          @toggle="toggleDir"
+          :children-by-path="childrenByPath"
+          @toggle="onNodeClick"
         />
       </template>
     </NScrollbar>

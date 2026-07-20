@@ -86,6 +86,12 @@ export const useChatStore = defineStore('chat', () => {
   const lastTaskNotification = ref<{ task_name: string; status: string; message: string } | null>(null)
   /** 最近一次 Agent 流式错误（App.vue 监听并弹出 toast）。 */
   const lastError = ref<{ session_id: string; message: string; at: number } | null>(null)
+  /** 请求向当前会话输入框追加文本（文件树点击文件时使用，ChatPanel watch）。 */
+  const pendingInsert = ref<{ text: string; at: number } | null>(null)
+
+  function requestInsertToInput(text: string) {
+    pendingInsert.value = { text, at: Date.now() }
+  }
 
   const currentSession = computed(() =>
     sessions.value.find((s) => s.id === currentSessionId.value) || null
@@ -641,6 +647,8 @@ export const useChatStore = defineStore('chat', () => {
     tasksChangedAt,
     lastTaskNotification,
     lastError,
+    pendingInsert,
+    requestInsertToInput,
     init,
     loadSessions,
     createSession,

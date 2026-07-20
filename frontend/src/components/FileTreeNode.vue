@@ -11,6 +11,7 @@ export default defineComponent({
     depth: { type: Number, required: true },
     expanded: { type: Object as () => Set<string>, required: true },
     loadingPaths: { type: Object as () => Set<string>, required: true },
+    childrenByPath: { type: Object as () => Record<string, FileNode[]>, required: true },
   },
   emits: {
     toggle: (_node: FileNode) => true,
@@ -31,30 +32,36 @@ export default defineComponent({
           class: ['tree-row', { dir: isDir, file: !isDir }],
           style: { paddingLeft: `${indent + 8}px` },
           onClick: () => emit('toggle', props.node),
-          title: isDir ? '点击展开/收起' : '点击插入路径到输入框',
+          title: isDir
+            ? '点击展开/收起'
+            : '点击插入路径到输入框（Shift+点击直接引用）',
         },
         [
-          h('span', { class: 'tree-icon' }, isDir ? (isOpen ? '▾' : '▸') : '·'),
+          h('span', { class: 'tree-icon' }, isDir ? (isOpen ? '▾' : '▸') : ''),
+          h('span', { class: 'file-mark' }, isDir ? '' : '📄'),
           h('span', { class: 'tree-name' }, props.node.name),
           isLoading ? h(NSpin, { size: 'small', style: 'margin-left:auto' }) : null,
         ],
       )
 
-      const children =
-        isDir && isOpen && props.node.children
-          ? props.node.children.map((child) =>
-              h(self, {
-                key: child.path,
-                node: child,
-                depth: props.depth + 1,
-                expanded: props.expanded,
-                loadingPaths: props.loadingPaths,
-                onToggle: (n: FileNode) => emit('toggle', n),
-              }),
-            )
-          : []
+      // 子节点优先从 childrenByPath 缓存拿；兜底 node.children（首次全量返回时）
+      const children = isDir && isOpen
+        ? (props.childrenByPath[props.node.path] ?? props.node.children ?? [])
+        : []
 
-      return h('div', {}, [row, ...children])
+      const childNodes = children.map((child) =>
+        h(self, {
+          key: child.path,
+          node: child,
+          depth: props.depth + 1,
+          expanded: props.expanded,
+          loadingPaths: props.loadingPaths,
+          childrenByPath: props.childrenByPath,
+          onToggle: (n: FileNode) => emit('toggle', n),
+        }),
+      )
+
+      return h('div', {}, [row, ...childNodes])
     }
   },
 })
@@ -64,7 +71,7 @@ export default defineComponent({
 .tree-row {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 4px;
   padding: 3px 8px;
   cursor: pointer;
   font-size: 12px;
@@ -77,6 +84,7 @@ export default defineComponent({
 }
 .tree-row:hover { background: #eef2f7; }
 .tree-row.dir { color: #1677ff; font-weight: 500; }
-.tree-icon { width: 10px; color: #999; flex-shrink: 0; }
+.tree-icon { width: 10px; color: #999; flex-shrink: 0; text-align: center; font-size: 10px; }
+.file-mark { font-size: 11px; opacity: 0.6; flex-shrink: 0; }
 .tree-name { overflow: hidden; text-overflow: ellipsis; }
 </style>
