@@ -204,6 +204,31 @@ const allMessages = computed(() => {
   return msgs
 })
 
+// ── 长会话虚拟化 ────────────────────────────────────────────────────────────
+// 长会话（200+ 消息）滚动会明显卡，因为每条都渲染 MarkdownRenderer + N 个 ToolCallCard。
+// 简单方案：只渲染最近 renderWindow 条；用户点"显示更早消息"逐次翻倍。
+// 切会话时窗口重置。
+const RENDER_WINDOW_INITIAL = 60
+const RENDER_WINDOW_STEP = 60
+const renderWindow = ref(RENDER_WINDOW_INITIAL)
+
+watch(() => chat.currentSessionId, () => {
+  renderWindow.value = RENDER_WINDOW_INITIAL
+})
+
+const hiddenCount = computed(() =>
+  Math.max(0, allMessages.value.length - renderWindow.value),
+)
+
+const visibleMessages = computed(() => {
+  if (allMessages.value.length <= renderWindow.value) return allMessages.value
+  return allMessages.value.slice(-renderWindow.value)
+})
+
+function loadMoreHistory() {
+  renderWindow.value += RENDER_WINDOW_STEP
+}
+
 // ── 智能滚动：用户向上翻时不强制滚到底部 ─────────────────────────────────────
 //
 // 实现要点：
@@ -769,7 +794,12 @@ function handleMentionKeydown(e: KeyboardEvent): boolean {
           description="发送消息开始对话"
           class="empty-chat"
         />
-        <template v-for="msg in allMessages" :key="msg.id">
+        <div v-if="hiddenCount > 0" class="load-more-history">
+          <button class="load-more-btn" @click="loadMoreHistory">
+            显示更早的 {{ Math.min(hiddenCount, 60) }} 条消息（共 {{ hiddenCount }} 条被折叠）
+          </button>
+        </div>
+        <template v-for="msg in visibleMessages" :key="msg.id">
           <MessageBubble :message="msg" />
           <!-- SubAgent 块：渲染在对应的 assistant 消息下方 -->
           <template v-if="msg.role === 'assistant' && msg.subAgents?.length">
@@ -1226,6 +1256,27 @@ function handleMentionKeydown(e: KeyboardEvent): boolean {
 .messages-area { flex: 1; }
 .messages-container { padding: 16px 20px; min-height: 100%; }
 .empty-chat { margin-top: 60px; }
+
+.load-more-history {
+  display: flex;
+  justify-content: center;
+  margin: 12px 0 20px;
+}
+.load-more-btn {
+  padding: 6px 14px;
+  border: 1px dashed var(--md-border);
+  background: var(--md-bg-subtle);
+  color: var(--md-text-secondary);
+  border-radius: 999px;
+  font-size: 12px;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+.load-more-btn:hover {
+  border-color: var(--md-brand);
+  color: var(--md-brand);
+  background: var(--md-brand-soft);
+}
 
 .typing-indicator {
   display: flex;

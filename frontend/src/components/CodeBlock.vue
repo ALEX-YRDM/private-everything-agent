@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
-import hljs from 'highlight.js'
+import hljs from '../utils/hljs'
 import { copyToClipboard } from '../utils/clipboard'
 import { useMessage } from 'naive-ui'
 

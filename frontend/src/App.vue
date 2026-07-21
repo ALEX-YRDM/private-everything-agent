@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, onMounted, watch, defineComponent, provide } from 'vue'
+import { ref, computed, onMounted, watch, defineComponent, defineAsyncComponent, provide } from 'vue'
 import { NConfigProvider, NMessageProvider, useMessage, darkTheme } from 'naive-ui'
 import SessionList from './components/SessionList.vue'
 import ChatPanel from './components/ChatPanel.vue'
@@ -7,7 +7,8 @@ import FileTreePanel from './components/FileTreePanel.vue'
 import CodeViewer from './components/CodeViewer.vue'
 import SettingsPanel from './components/SettingsPanel.vue'
 import SchedulerPanel from './components/SchedulerPanel.vue'
-import TerminalPanel from './components/TerminalPanel.vue'
+// 终端面板依赖 xterm.js（~200KB），按需懒加载；首屏不下载
+const TerminalPanel = defineAsyncComponent(() => import('./components/TerminalPanel.vue'))
 import { useChatStore } from './stores/chat'
 import { useSettingsStore } from './stores/settings'
 import { useLayoutStore } from './stores/layout'
@@ -75,8 +76,8 @@ const TaskNotificationWatcher = defineComponent({
           <!-- 代码浏览器（只读，中部悬浮） -->
           <CodeViewer />
 
-          <!-- 本地终端抽屉（多 tab） -->
-          <TerminalPanel />
+          <!-- 本地终端抽屉（多 tab）——只在首次打开时懒加载 xterm chunk -->
+          <TerminalPanel v-if="layout.terminalOpen" />
 
           <!-- 右侧文件树（会话存在即显示；未绑定 working_dir 时展示默认 workspace） -->
           <FileTreePanel
