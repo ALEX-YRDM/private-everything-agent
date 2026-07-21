@@ -28,6 +28,23 @@ class AgentLoop:
 
     TOOL_RESULT_MAX_CHARS = 20000
 
+    # 按工具类型分档的截断上限（未列出的走 TOOL_RESULT_MAX_CHARS 默认值）
+    # 读类工具需要看完整文件/搜索结果；执行类工具容易一次爆炸（find /、日志 tail）
+    TOOL_RESULT_LIMITS = {
+        "read_file":   40000,
+        "read_skill":  40000,
+        "grep":        20000,
+        "glob":        15000,
+        "list_dir":    15000,
+        "exec":        10000,
+        "web_fetch":   30000,
+        "web_search":  15000,
+    }
+
+    @classmethod
+    def _result_limit(cls, tool_name: str) -> int:
+        return cls.TOOL_RESULT_LIMITS.get(tool_name, cls.TOOL_RESULT_MAX_CHARS)
+
     def __init__(
         self,
         provider: LLMProvider,
@@ -459,8 +476,9 @@ class AgentLoop:
                                 session_ctx=ctx,
                             )
 
-                        if len(result) > self.TOOL_RESULT_MAX_CHARS:
-                            result = result[: self.TOOL_RESULT_MAX_CHARS] + "...[已截断]"
+                        limit = self._result_limit(tc["name"])
+                        if len(result) > limit:
+                            result = result[:limit] + f"\n\n...[已截断，原始长度 {len(result)}，工具 {tc['name']} 上限 {limit}]"
 
                         yield {"type": "tool_result", "id": tc["id"], "name": tc["name"], "content": result}
 
@@ -605,7 +623,10 @@ class AgentLoop:
         from ..providers.litellm_provider import LiteLLMProvider
         from ..tools.filesystem import ReadFileTool, WriteFileTool, EditFileTool, ListDirTool, ReadSkillTool
         from ..tools.coding import GlobTool, GrepTool, MultiEditTool, ApplyPatchTool
-        from ..tools.shell import ExecTool
+        from ..tools.shell import (
+            ExecTool, SpawnBackgroundTool, ReadProcessOutputTool,
+            KillProcessTool, ListProcessesTool,
+        )
         from ..tools.web import WebSearchTool, WebFetchTool
 
         workspace = Path(config.workspace)
@@ -641,6 +662,11 @@ class AgentLoop:
         tools.register(ApplyPatchTool())
         # ExecTool 保留 default_cwd 兜底（无 ctx 时使用，如老会话）
         tools.register(ExecTool(workspace, config.tools.shell_timeout))
+        # 后台进程工具组
+        tools.register(SpawnBackgroundTool(workspace))
+        tools.register(ReadProcessOutputTool())
+        tools.register(KillProcessTool())
+        tools.register(ListProcessesTool())
         if config.tools.brave_api_key:
             tools.register(WebSearchTool(config.tools.brave_api_key))
         #tools.register(DuckDuckGoSearchTool())

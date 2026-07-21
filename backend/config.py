@@ -23,6 +23,7 @@ class ToolsConfig(BaseSettings):
     subagent_concurrency: int = 5
     confirm_required_tools: list[str] = [
         "exec", "write_file", "edit_file", "multi_edit", "apply_patch",
+        "spawn_background", "kill_process",
     ]
 
     model_config = {"env_prefix": "TOOLS__", "extra": "ignore"}

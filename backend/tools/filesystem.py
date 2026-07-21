@@ -1,3 +1,4 @@
+import asyncio
 from pathlib import Path
 from .base import Tool
 from .context import ToolContext
@@ -55,7 +56,8 @@ class ReadFileTool(Tool):
     async def execute(self, path: str, offset: int = None, limit: int = None,
                       _ctx: ToolContext | None = None) -> str:
         p = _PathResolver.resolve(path, _ctx)
-        lines = p.read_text(encoding="utf-8").splitlines(keepends=True)
+        text = await asyncio.to_thread(p.read_text, encoding="utf-8")
+        lines = text.splitlines(keepends=True)
         if offset:
             lines = lines[offset - 1:]
         if limit:
@@ -83,7 +85,7 @@ class WriteFileTool(Tool):
                       _ctx: ToolContext | None = None) -> str:
         p = _PathResolver.resolve(path, _ctx)
         p.parent.mkdir(parents=True, exist_ok=True)
-        p.write_text(content, encoding="utf-8")
+        await asyncio.to_thread(p.write_text, content, encoding="utf-8")
         return f"已写入 {p}（{len(content)} 字符）"
 
 
@@ -107,13 +109,15 @@ class EditFileTool(Tool):
     async def execute(self, path: str, old_string: str, new_string: str,
                       _ctx: ToolContext | None = None) -> str:
         p = _PathResolver.resolve(path, _ctx)
-        content = p.read_text(encoding="utf-8")
+        content = await asyncio.to_thread(p.read_text, encoding="utf-8")
         count = content.count(old_string)
         if count == 0:
             return "[错误] 未在文件中找到要替换的文本"
         if count > 1:
             return f"[错误] 找到 {count} 处匹配，需要提供更多上下文使其唯一"
-        p.write_text(content.replace(old_string, new_string, 1), encoding="utf-8")
+        await asyncio.to_thread(
+            p.write_text, content.replace(old_string, new_string, 1), encoding="utf-8",
+        )
         return "替换成功"
 
 
@@ -137,12 +141,12 @@ class ReadSkillTool(Tool):
         # 用户技能优先
         user_path = self.user_skills_dir / name / "SKILL.md"
         if user_path.exists():
-            return user_path.read_text(encoding="utf-8")
+            return await asyncio.to_thread(user_path.read_text, encoding="utf-8")
 
         # 系统技能缓存
         cache_path = self.cache_dir / name / "SKILL.md"
         if cache_path.exists():
-            return cache_path.read_text(encoding="utf-8")
+            return await asyncio.to_thread(cache_path.read_text, encoding="utf-8")
 
         available: list[str] = []
         if self.cache_dir.exists():

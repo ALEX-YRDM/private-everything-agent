@@ -140,8 +140,11 @@ class GrepTool(Tool):
         if shutil.which("rg"):
             return await self._grep_rg(pattern, base, root, include, output_mode,
                                         context_lines, case_insensitive, limit)
-        return self._grep_python(pattern, base, include, output_mode,
-                                  context_lines, case_insensitive, limit, root)
+        # 纯 Python 后备：整体丢到线程池，避免大目录遍历阻塞 event loop
+        return await asyncio.to_thread(
+            self._grep_python, pattern, base, include, output_mode,
+            context_lines, case_insensitive, limit, root,
+        )
 
     async def _grep_rg(self, pattern: str, base: Path, root: Path, include: str | None,
                        output_mode: str, ctx_lines: int, ci: bool, limit: int) -> str:
@@ -272,7 +275,7 @@ class MultiEditTool(Tool):
         if not p.exists():
             return f"[错误] 文件不存在: {p}"
 
-        original = p.read_text(encoding="utf-8")
+        original = await asyncio.to_thread(p.read_text, encoding="utf-8")
         working = original
         applied = []
 
@@ -297,7 +300,7 @@ class MultiEditTool(Tool):
                 working = working.replace(old, new, 1)
             applied.append(f"  {idx}. {'全部替换 %d 处' % count if replace_all else '单处替换'}")
 
-        p.write_text(working, encoding="utf-8")
+        await asyncio.to_thread(p.write_text, working, encoding="utf-8")
         orig_lines = original.count("\n") + 1
         new_lines = working.count("\n") + 1
         return (
@@ -365,7 +368,9 @@ class ApplyPatchTool(Tool):
 
             if not target_path.exists():
                 return f"[错误] 目标文件不存在: {target_path}"
-            original_lines = target_path.read_text(encoding="utf-8").splitlines(keepends=True)
+            original_lines = (
+                await asyncio.to_thread(target_path.read_text, encoding="utf-8")
+            ).splitlines(keepends=True)
             new_lines = list(original_lines)
 
             # 从后往前应用 hunk 避免行号偏移
@@ -397,7 +402,7 @@ class ApplyPatchTool(Tool):
                     target.unlink()
             else:
                 target.parent.mkdir(parents=True, exist_ok=True)
-                target.write_text(content, encoding="utf-8")
+                await asyncio.to_thread(target.write_text, content, encoding="utf-8")
 
         summary = "\n".join(f"  - {desc}" for _, _, desc in plan)
         return f"已应用补丁（{len(plan)} 个文件）：\n{summary}"

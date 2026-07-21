@@ -1,6 +1,25 @@
 from pathlib import Path
+from functools import lru_cache
 from .skills import SkillsLoader
 from .memory import MemoryManager
+
+
+@lru_cache(maxsize=64)
+def _read_text_cached(path_str: str, mtime_ns: int) -> str:
+    """
+    读取小型配置文件（AGENTS.md / SOUL.md / USER.md / 项目 AGENTS.md）。
+    (path, mtime_ns) 组合作为缓存键：文件被外部编辑后 mtime 变化，缓存自动失效。
+    """
+    return Path(path_str).read_text(encoding="utf-8")
+
+
+def _read_config_md(path: Path) -> str | None:
+    """带 mtime 失效的 md 读取；文件不存在返回 None。"""
+    try:
+        st = path.stat()
+    except OSError:
+        return None
+    return _read_text_cached(str(path), st.st_mtime_ns)
 
 
 class ContextBuilder:
@@ -35,28 +54,27 @@ class ContextBuilder:
         parts = []
 
         agents_md = self.config_dir / "AGENTS.md"
-        if agents_md.exists():
-            parts.append(agents_md.read_text(encoding="utf-8"))
+        agents_md_text = _read_config_md(agents_md)
+        if agents_md_text is not None:
+            parts.append(agents_md_text)
             parts.append(self._operational_rules())
         else:
             parts.append(self._default_identity())
 
         for fname in ["SOUL.md", "USER.md"]:
             f = self.config_dir / fname
-            if f.exists():
-                parts.append(f"## {fname}\n{f.read_text(encoding='utf-8')}")
+            text = _read_config_md(f)
+            if text is not None:
+                parts.append(f"## {fname}\n{text}")
 
         # 项目级 AGENTS.md（若存在于 working_dir，且与全局 config_dir 不同）：
         # 追加而不替换全局
         if working_dir and working_dir.resolve() != self.config_dir.resolve():
             for fname in ("AGENTS.md", "CLAUDE.md"):
                 proj_md = working_dir / fname
-                if proj_md.exists() and proj_md.is_file():
-                    try:
-                        content = proj_md.read_text(encoding="utf-8")
-                        parts.append(f"## 项目 {fname}（{working_dir.name}）\n{content}")
-                    except Exception:
-                        pass
+                proj_text = _read_config_md(proj_md)
+                if proj_text is not None:
+                    parts.append(f"## 项目 {fname}({working_dir.name})\n{proj_text}")
                     break  # 优先 AGENTS.md；不同时注入两份
 
         # 工作目录简报
