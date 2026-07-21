@@ -129,6 +129,7 @@ class TestToolRegistry:
             "kill_process", "list_processes",
             "spawn_subagents",
             "create_task", "list_tasks", "update_task", "delete_task",
+            "todo_write", "todo_read",
         }
         missing = expected - set(tools)
         assert not missing, f"缺失工具: {missing}"

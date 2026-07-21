@@ -12,6 +12,12 @@ export type ConfirmPreview =
   | { kind: 'file'; path: string }
   | { kind: 'patch'; patch: string }
 
+export interface TodoItem {
+  id: string
+  content: string
+  status: 'pending' | 'in_progress' | 'completed'
+}
+
 export type StreamEvent =
   | { type: 'thinking'; content: string }
   | { type: 'tool_call'; name: string; id: string; args: Record<string, unknown> }
@@ -27,6 +33,7 @@ export type StreamEvent =
   | { type: 'subagent_done'; subagent_id: string; result: string; error?: string }
   | { type: 'tool_confirm'; id: string; name: string; args: Record<string, unknown>; cwd: string; why: string; preview?: ConfirmPreview; suggested_trust_path?: string; suggested_trust_command?: string }
   | { type: 'tool_denied'; id: string; name: string; reason: string }
+  | { type: 'todos_update'; session_id?: string; todos: TodoItem[] }
 
 export type ConfirmDecision = 'allow' | 'deny' | 'trust_path' | 'trust_command'
 

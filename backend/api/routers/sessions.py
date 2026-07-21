@@ -34,6 +34,10 @@ class SummaryBody(BaseModel):
     summary: str
 
 
+class TodosBody(BaseModel):
+    todos: list[dict]
+
+
 @router.get("")
 async def list_sessions(sessions=Depends(get_sessions)):
     return {"sessions": await sessions.list_sessions()}
@@ -636,3 +640,19 @@ async def set_session_summary(session_id: str, body: SummaryBody,
         (body.summary, session_id),
     )
     return {"session_id": session_id, "summary": body.summary}
+
+
+# ── 会话 todos（todo_write 工具的读侧 + 前端手动编辑）─────────────────────
+
+@router.get("/{session_id}/todos")
+async def get_session_todos(session_id: str, db=Depends(get_db)):
+    meta = await db.get_session_metadata(session_id)
+    return {"session_id": session_id, "todos": meta.get("todos") or []}
+
+
+@router.put("/{session_id}/todos")
+async def set_session_todos(session_id: str, body: TodosBody, db=Depends(get_db)):
+    meta = await db.get_session_metadata(session_id)
+    meta["todos"] = body.todos or []
+    await db.set_session_metadata(session_id, meta)
+    return {"session_id": session_id, "todos": meta["todos"]}

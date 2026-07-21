@@ -7,6 +7,7 @@ import FileTreePanel from './components/FileTreePanel.vue'
 import CodeViewer from './components/CodeViewer.vue'
 import SettingsPanel from './components/SettingsPanel.vue'
 import SchedulerPanel from './components/SchedulerPanel.vue'
+import TodoPanel from './components/TodoPanel.vue'
 // 终端面板依赖 xterm.js（~200KB），按需懒加载；首屏不下载
 const TerminalPanel = defineAsyncComponent(() => import('./components/TerminalPanel.vue'))
 import { useChatStore } from './stores/chat'
@@ -93,6 +94,9 @@ const TaskNotificationWatcher = defineComponent({
 
         <!-- 定时任务面板 -->
         <SchedulerPanel v-model:show="showScheduler" />
+
+        <!-- Todo 悬浮面板：Agent 通过 todo_write 维护，用户可切换/编辑 -->
+        <TodoPanel />
       </div>
     </NMessageProvider>
   </NConfigProvider>

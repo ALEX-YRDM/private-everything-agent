@@ -1,7 +1,7 @@
 import { ref, computed } from 'vue'
 import { defineStore } from 'pinia'
 import { api, type Session, type Message } from '../api/http'
-import { AgentWebSocket, type StreamEvent, type SubAgentInnerEvent, type ConfirmDecision, type ConfirmPreview } from '../api/websocket'
+import { AgentWebSocket, type StreamEvent, type SubAgentInnerEvent, type ConfirmDecision, type ConfirmPreview, type TodoItem } from '../api/websocket'
 
 export interface SubAgentState {
   id: string
@@ -73,6 +73,8 @@ interface SessionState {
   pendingConfirms: Map<string, PendingConfirm>
   // 附加到"下一条消息"的文件路径列表（发送后清空；切会话不共享）
   pendingAttachments: string[]
+  // Agent 通过 todo_write 维护的 todo 列表（服务器推送 todos_update 时同步）
+  todos: TodoItem[]
 }
 
 const TASK_TOOLS = new Set(['create_task', 'delete_task', 'update_task'])
@@ -135,6 +137,39 @@ export const useChatStore = defineStore('chat', () => {
       : [],
   )
 
+  /** 当前会话的 todos（响应式，供 TodoPanel 使用） */
+  const currentTodos = computed<TodoItem[]>(() =>
+    currentSessionId.value
+      ? (sessionStates.value[currentSessionId.value]?.todos ?? [])
+      : [],
+  )
+
+  async function refreshTodos(sessionId?: string): Promise<void> {
+    const sid = sessionId ?? currentSessionId.value
+    if (!sid) return
+    try {
+      const r = await fetch(`/api/sessions/${sid}/todos`)
+      if (!r.ok) return
+      const data = await r.json()
+      const st = getSessionState(sid)
+      st.todos = Array.isArray(data.todos) ? data.todos : []
+    } catch {
+      /* ignore */
+    }
+  }
+
+  async function saveTodos(sessionId: string, todos: TodoItem[]): Promise<void> {
+    const r = await fetch(`/api/sessions/${sessionId}/todos`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ todos }),
+    })
+    if (!r.ok) throw new Error(await r.text())
+    const data = await r.json()
+    const st = getSessionState(sessionId)
+    st.todos = Array.isArray(data.todos) ? data.todos : []
+  }
+
   /** 加入附件；重复路径不再加（去重）。返回是否真的加入了。 */
   function addAttachment(path: string): boolean {
     const sid = currentSessionId.value
@@ -182,6 +217,7 @@ export const useChatStore = defineStore('chat', () => {
         subagentSessionsLoaded: false,
         pendingConfirms: new Map(),
         pendingAttachments: [],
+        todos: [],
       }
     }
     return sessionStates.value[sessionId]!
@@ -622,6 +658,11 @@ export const useChatStore = defineStore('chat', () => {
     } else if (event.type === 'task_notification') {
       tasksChangedAt.value++
       lastTaskNotification.value = event
+    } else if (event.type === 'todos_update') {
+      // 后端 todo_write 工具通过 stream_callback 推送最新 todos
+      const targetId = event.session_id || sessionId
+      const st = getSessionState(targetId)
+      st.todos = event.todos ?? []
     }
   }
 
@@ -739,6 +780,9 @@ export const useChatStore = defineStore('chat', () => {
     addAttachment,
     removeAttachment,
     clearAttachments,
+    currentTodos,
+    refreshTodos,
+    saveTodos,
     requestInsertToInput,
     init,
     loadSessions,

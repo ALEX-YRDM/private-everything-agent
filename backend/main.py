@@ -371,6 +371,11 @@ async def lifespan(app: FastAPI):
     from .tools.task_tools import register_task_tools
     register_task_tools(agent.tools, db, scheduler)
 
+    # Todo 工具组：写 / 读会话级 todo，让前端 TodoPanel 实时展示进度
+    from .tools.todo import TodoWriteTool, TodoReadTool
+    agent.tools.register(TodoWriteTool(db))
+    agent.tools.register(TodoReadTool(db))
+
     # 注册 SubAgent 工具（需在 agent 完全就绪后注册，以便持有引用）
     from .tools.subagent import SpawnSubAgentsTool
     agent.tools.register(SpawnSubAgentsTool(
