@@ -81,6 +81,7 @@ class SpawnSubAgentsTool(StreamingTool):
         parent_session_id = getattr(self._main_loop, "_current_session_id", None)
         parent_ctx = _ctx or getattr(self._main_loop, "_current_ctx", None)
         parent_confirmer = getattr(self._main_loop, "_current_confirmer", None)
+        parent_plan_mode = getattr(self._main_loop, "_current_plan_mode", False)
 
         async def run_one(task: dict) -> dict:
             task_id = task["id"]
@@ -109,6 +110,7 @@ class SpawnSubAgentsTool(StreamingTool):
             sub_loop = self._main_loop.create_subagent_loop(allowed_tools=allowed_tools)
             sub_loop._current_ctx = parent_ctx
             sub_loop._inherited_confirmer = parent_confirmer
+            sub_loop._inherited_plan_mode = parent_plan_mode
             result = ""
             try:
                 async for event in sub_loop.process_stream(

@@ -38,6 +38,10 @@ class TodosBody(BaseModel):
     todos: list[dict]
 
 
+class PlanModeBody(BaseModel):
+    plan_mode: bool
+
+
 @router.get("")
 async def list_sessions(sessions=Depends(get_sessions)):
     return {"sessions": await sessions.list_sessions()}
@@ -682,3 +686,19 @@ async def truncate_messages_from(session_id: str, message_id: int,
     )
     return {"session_id": session_id, "deleted_from_id": message_id,
             "deleted_count": result.rowcount if hasattr(result, 'rowcount') else -1}
+
+
+# ── Plan Mode：只出方案不执行破坏性工具 ─────────────────────────────────
+
+@router.get("/{session_id}/plan-mode")
+async def get_plan_mode(session_id: str, db=Depends(get_db)):
+    meta = await db.get_session_metadata(session_id)
+    return {"session_id": session_id, "plan_mode": bool(meta.get("plan_mode"))}
+
+
+@router.put("/{session_id}/plan-mode")
+async def set_plan_mode(session_id: str, body: PlanModeBody, db=Depends(get_db)):
+    meta = await db.get_session_metadata(session_id)
+    meta["plan_mode"] = bool(body.plan_mode)
+    await db.set_session_metadata(session_id, meta)
+    return {"session_id": session_id, "plan_mode": meta["plan_mode"]}

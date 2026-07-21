@@ -4,8 +4,8 @@
  *
  * 保持无状态：状态从 props 传入；行为通过 emit 或 inject 提供的 App 级动作触发。
  */
-import { inject } from 'vue'
-import { NTooltip } from 'naive-ui'
+import { inject, watch, onMounted } from 'vue'
+import { NTooltip, useMessage } from 'naive-ui'
 import { useChatStore } from '../stores/chat'
 import { useThemeStore } from '../stores/theme'
 
@@ -29,6 +29,24 @@ const emit = defineEmits<{
 
 const chat = useChatStore()
 const theme = useThemeStore()
+const msg = useMessage()
+
+// 会话切换时刷新 plan-mode 状态；组件挂载时立刻拉一次
+watch(() => chat.currentSessionId, (sid) => {
+  if (sid) chat.refreshPlanMode(sid)
+})
+onMounted(() => {
+  if (chat.currentSessionId) chat.refreshPlanMode(chat.currentSessionId)
+})
+
+async function togglePlanMode() {
+  try {
+    await chat.setPlanMode(!chat.planMode)
+    msg.success(chat.planMode ? '已进入 Plan Mode：只出方案不执行' : '已退出 Plan Mode')
+  } catch (e: any) {
+    msg.error(`切换失败：${e?.message || e}`)
+  }
+}
 
 // App.vue provide 的三个动作（在 ChatPanel 里已经 inject 过，这里再 inject 一次是纯 lookup）
 const openScheduler = inject<() => void>('openScheduler', () => {})
@@ -42,6 +60,22 @@ const toggleTerminal = inject<() => void>('toggleTerminal', () => {})
       {{ chat.currentSession?.title || '选择或创建会话' }}
     </span>
     <div class="header-actions">
+      <NTooltip v-if="chat.currentSession">
+        <template #trigger>
+          <button
+            class="chip"
+            :class="{ active: chat.planMode, warn: chat.planMode }"
+            @click="togglePlanMode"
+          >
+            <span class="chip-emoji">🧭</span>
+            <span class="chip-text">Plan{{ chat.planMode ? ' · 开' : '' }}</span>
+          </button>
+        </template>
+        {{ chat.planMode
+          ? 'Plan Mode：只出方案不执行破坏性工具。点击退出。'
+          : '进入 Plan Mode：Agent 只出方案不执行，适合大改动前对齐'
+        }}
+      </NTooltip>
       <NTooltip v-if="chat.currentSession">
         <template #trigger>
           <button
@@ -145,6 +179,11 @@ const toggleTerminal = inject<() => void>('toggleTerminal', () => {})
   border-color: var(--md-brand);
   background: var(--md-brand-soft);
   color: var(--md-brand-strong);
+}
+.chip.warn {
+  border-color: var(--md-warning);
+  background: var(--md-warning-soft);
+  color: var(--md-warning);
 }
 .chip-emoji {
   font-size: 12px;

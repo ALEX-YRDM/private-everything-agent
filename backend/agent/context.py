@@ -44,14 +44,19 @@ class ContextBuilder:
         session_id: str,
         working_dir: Path | None = None,
         project_probe: dict | None = None,
+        plan_mode: bool = False,
     ) -> str:
         """
         构建 System Prompt（静态部分 + 动态记忆 + 可选 cwd 简报）。
 
         working_dir：会话绑定的工作目录（None 则默认为 workspace）。
         project_probe：项目探测结果，含 language/framework/git 等；None 则跳过。
+        plan_mode：Plan Mode 开启时追加"只出方案不执行"的指令。
         """
         parts = []
+
+        if plan_mode:
+            parts.append(self._plan_mode_prompt())
 
         agents_md = self.config_dir / "AGENTS.md"
         agents_md_text = _read_config_md(agents_md)
@@ -167,9 +172,12 @@ class ContextBuilder:
         files: list[dict] | None = None,
         working_dir: Path | None = None,
         project_probe: dict | None = None,
+        plan_mode: bool = False,
     ) -> list[dict]:
         """组合完整消息列表：system + 历史 + 当前消息。"""
-        system_prompt = await self.build_system_prompt(session_id, working_dir, project_probe)
+        system_prompt = await self.build_system_prompt(
+            session_id, working_dir, project_probe, plan_mode=plan_mode,
+        )
 
         # 构建完整的用户消息内容，包括文件（不包含时间戳以保持缓存一致性）
         full_content = user_content
@@ -241,6 +249,17 @@ class ContextBuilder:
             {"role": "system", "content": system},
             {"role": "user", "content": task},
         ]
+
+    def _plan_mode_prompt(self) -> str:
+        return (
+            "## 🧭 Plan Mode 已开启\n"
+            "在本次回复中，你**只做规划、不做真实执行**。\n\n"
+            "- 允许调用只读工具（`read_file` / `list_dir` / `glob` / `grep`）收集必要信息\n"
+            "- **禁止**调用任何破坏性工具（write_file / edit_file / multi_edit / apply_patch / "
+            "exec / spawn_background 等）。这些工具会被自动拒绝，不要反复尝试\n"
+            "- 用清晰分步骤描述『要改哪些文件、每处怎么改、每个命令预期做什么』\n"
+            "- 用户批准后会关闭 Plan Mode，你再实际执行"
+        )
 
     def _operational_rules(self) -> str:
         return (

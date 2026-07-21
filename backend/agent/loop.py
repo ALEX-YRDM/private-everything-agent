@@ -228,6 +228,8 @@ class AgentLoop:
         """
         self._current_session_id = session_id
         self._current_confirmer = confirmer
+        # 供 SpawnSubAgentsTool 读取当前 plan_mode（下方 non-subagent 分支会覆盖）
+        self._current_plan_mode = False
         # SubAgent 场景下参数 confirmer 通常为空，从父 loop 继承（由 SpawnSubAgentsTool 注入）
         if confirmer is None:
             confirmer = getattr(self, "_inherited_confirmer", None)
@@ -241,6 +243,8 @@ class AgentLoop:
             should_generate_title = False
             ctx = self._current_ctx
             sub_working_dir = ctx.cwd if ctx else None
+            # SubAgent 从父 loop 继承 plan_mode（父在 plan mode 时子任务也应受限）
+            plan_mode = bool(getattr(self, "_inherited_plan_mode", False))
             # SubAgent 场景下没有 session_meta，project_probe 若在父会话里可以额外传，
             # 但当前只需 cwd 简报即可
             messages = await self.context.build_subagent_messages(
@@ -256,6 +260,8 @@ class AgentLoop:
             should_generate_title = (session_row or {}).get("title") == "新会话"
             session_model = (session_row or {}).get("model") or None
             session_overrides = session_meta.get("tool_overrides", {})
+            plan_mode = bool(session_meta.get("plan_mode"))
+            self._current_plan_mode = plan_mode
             effective_model = model or session_model or self.model
             ctx = self._build_tool_ctx(session_id, session_row, session_meta)
             main_working_dir = ctx.cwd if (session_row or {}).get("working_dir") else None
@@ -267,6 +273,7 @@ class AgentLoop:
                 history, user_content, session_id,
                 images=images, files=files,
                 working_dir=main_working_dir, project_probe=project_probe,
+                plan_mode=plan_mode,
             )
 
         self._current_ctx = ctx
@@ -381,6 +388,27 @@ class AgentLoop:
 
                     for tc in tc_list:
                         tool_obj = self.tools.get_tool(tc["name"])
+
+                        # ── Plan Mode 拦截 ───────────────────────────────
+                        # 处于 Plan Mode 时，所有破坏性工具直接拒绝执行，
+                        # 让 Agent 把方案写在回复里，用户确认后关闭 Plan Mode 再执行
+                        if plan_mode and tc["name"] in self.confirm_required_tools:
+                            reason = "当前处于 Plan Mode：请把方案与预期改动写在回复中；用户批准后关闭 Plan Mode 再实际执行。"
+                            yield {
+                                "type": "tool_denied", "id": tc["id"],
+                                "name": tc["name"], "reason": reason,
+                            }
+                            tool_msg = {
+                                "role": "tool",
+                                "tool_call_id": tc["id"],
+                                "name": tc["name"],
+                                "content": f"[Plan Mode] {reason}",
+                            }
+                            messages.append(tool_msg)
+                            new_messages.append(tool_msg)
+                            yield {"type": "tool_result", "id": tc["id"],
+                                   "name": tc["name"], "content": tool_msg["content"]}
+                            continue
 
                         # ── 破坏性工具确认 ────────────────────────────────
                         # 判定：工具名在 confirm_required_tools 中，且未被会话级

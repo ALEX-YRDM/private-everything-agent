@@ -204,6 +204,44 @@ export const useChatStore = defineStore('chat', () => {
     await sendMessage(newContent)
   }
 
+  /**
+   * Plan Mode：per-session 状态，从后端 metadata 拉/推。
+   * 面板级 UI 通过 planMode.get(sid) / setPlanMode(sid, v) 使用。
+   */
+  const planModeMap = ref<Record<string, boolean>>({})
+  const planMode = computed(() =>
+    currentSessionId.value ? !!planModeMap.value[currentSessionId.value] : false,
+  )
+
+  async function refreshPlanMode(sessionId?: string): Promise<void> {
+    const sid = sessionId ?? currentSessionId.value
+    if (!sid) return
+    try {
+      const r = await fetch(`/api/sessions/${sid}/plan-mode`)
+      if (!r.ok) return
+      const data = await r.json()
+      planModeMap.value[sid] = !!data.plan_mode
+    } catch { /* ignore */ }
+  }
+
+  async function setPlanMode(v: boolean): Promise<void> {
+    const sid = currentSessionId.value
+    if (!sid) return
+    // 乐观更新
+    planModeMap.value[sid] = v
+    try {
+      const r = await fetch(`/api/sessions/${sid}/plan-mode`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ plan_mode: v }),
+      })
+      if (!r.ok) throw new Error(await r.text())
+    } catch (e) {
+      planModeMap.value[sid] = !v  // 回滚
+      throw e
+    }
+  }
+
   /** 加入附件；重复路径不再加（去重）。返回是否真的加入了。 */
   function addAttachment(path: string): boolean {
     const sid = currentSessionId.value
@@ -818,6 +856,9 @@ export const useChatStore = defineStore('chat', () => {
     refreshTodos,
     saveTodos,
     editAndResendFrom,
+    planMode,
+    refreshPlanMode,
+    setPlanMode,
     requestInsertToInput,
     init,
     loadSessions,
