@@ -31,6 +31,17 @@ const toolCallEvents = computed(() => {
   return [...byId.values()]
 })
 
+// 每个工具调用对应的结果（若已到达）
+const toolResultsMap = computed(() => {
+  const map: Record<string, string> = {}
+  for (const e of props.subAgent.events) {
+    if (e.type === 'tool_result' && e.id) {
+      map[e.id] = e.content ?? ''
+    }
+  }
+  return map
+})
+
 // 每个工具调用的流式参数文本（到完整参数后清除）
 const streamingArgsMap = computed(() => {
   const acc = new Map<string, string>()
@@ -78,15 +89,26 @@ const accumulatedContent = computed(() =>
         <!-- 工具调用列表 -->
         <div class="tool-calls-section">
           <div v-for="tc in toolCallEvents" :key="tc.id" class="inner-tool-call">
-            <span class="tool-call-icon">⚙</span>
-            <span class="tool-call-name">{{ tc.name }}</span>
-            <!-- 流式生成参数时显示滚动文本，生成完毕后显示格式化截断 JSON -->
-            <span v-if="streamingArgsMap.has(tc.id)" class="tool-call-args streaming">
-              {{ streamingArgsMap.get(tc.id)?.slice(-60) }}
-            </span>
-            <span v-else-if="Object.keys(tc.args).length > 0" class="tool-call-args">
-              {{ JSON.stringify(tc.args).slice(0, 80) }}{{ JSON.stringify(tc.args).length > 80 ? '…' : '' }}
-            </span>
+            <div class="tool-call-row">
+              <span class="tool-call-icon">⚙</span>
+              <span class="tool-call-name">{{ tc.name }}</span>
+              <!-- 流式生成参数时显示滚动文本，生成完毕后显示格式化截断 JSON -->
+              <span v-if="streamingArgsMap.has(tc.id)" class="tool-call-args streaming">
+                {{ streamingArgsMap.get(tc.id)?.slice(-60) }}
+              </span>
+              <span v-else-if="Object.keys(tc.args).length > 0" class="tool-call-args">
+                {{ JSON.stringify(tc.args).slice(0, 80) }}{{ JSON.stringify(tc.args).length > 80 ? '…' : '' }}
+              </span>
+              <span v-if="toolResultsMap[tc.id] !== undefined" class="tool-call-status done">✓</span>
+              <span v-else class="tool-call-status pending">…</span>
+            </div>
+            <!-- 工具结果预览：短则完整展示，长则截断 200 字符 -->
+            <div v-if="toolResultsMap[tc.id] !== undefined" class="tool-call-result">
+              <span class="result-arrow">↳</span>
+              <span class="result-text">
+                {{ toolResultsMap[tc.id].slice(0, 200) }}{{ toolResultsMap[tc.id].length > 200 ? `…（共 ${toolResultsMap[tc.id].length} 字符）` : '' }}
+              </span>
+            </div>
           </div>
         </div>
       </NCollapseItem>
@@ -218,12 +240,20 @@ const accumulatedContent = computed(() =>
 
 .inner-tool-call {
   display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 3px 6px;
+  flex-direction: column;
+  gap: 2px;
+  padding: 4px 6px;
   background: rgba(0, 0, 0, 0.03);
   border-radius: 4px;
   font-size: 12px;
+  margin-bottom: 3px;
+}
+
+.tool-call-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
 }
 
 .tool-call-icon {
@@ -232,7 +262,7 @@ const accumulatedContent = computed(() =>
 }
 
 .tool-call-name {
-  font-family: monospace;
+  font-family: var(--md-font-mono, monospace);
   color: #1677ff;
   flex-shrink: 0;
 }
@@ -242,11 +272,42 @@ const accumulatedContent = computed(() =>
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  flex: 1;
+  min-width: 0;
 }
 
 .tool-call-args.streaming {
   color: #1677ff;
   font-style: italic;
+}
+
+.tool-call-status {
+  flex-shrink: 0;
+  font-size: 11px;
+  font-weight: 600;
+}
+.tool-call-status.done { color: var(--md-success, #16a34a); }
+.tool-call-status.pending { color: #d97706; }
+
+.tool-call-result {
+  display: flex;
+  gap: 6px;
+  padding-left: 22px;
+  color: #64748b;
+  font-family: var(--md-font-mono, monospace);
+  font-size: 11px;
+  line-height: 1.4;
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 100px;
+  overflow-y: auto;
+}
+.result-arrow {
+  color: #cbd5e1;
+  flex-shrink: 0;
+}
+.result-text {
+  flex: 1;
 }
 
 .accumulated-content {
