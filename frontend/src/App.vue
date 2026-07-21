@@ -73,9 +73,9 @@ const TaskNotificationWatcher = defineComponent({
           <!-- 本地终端抽屉（多 tab） -->
           <TerminalPanel />
 
-          <!-- 右侧文件树（仅当会话绑定 working_dir 时） -->
+          <!-- 右侧文件树（会话存在即显示；未绑定 working_dir 时展示默认 workspace） -->
           <FileTreePanel
-            v-if="workingDir"
+            v-if="chat.currentSessionId"
             :session-id="chat.currentSessionId"
             :working-dir="workingDir"
             @insert-path="handleInsertPath"

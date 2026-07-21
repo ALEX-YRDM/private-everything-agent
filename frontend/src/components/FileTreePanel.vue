@@ -26,7 +26,7 @@ const gitBranch = ref<string | null>(null)
 const gitIsRepo = ref(false)
 
 async function loadGitStatus() {
-  if (!props.sessionId || !props.workingDir) {
+  if (!props.sessionId) {
     gitFiles.value = {}
     gitBranch.value = null
     gitIsRepo.value = false
@@ -77,7 +77,7 @@ const rootLoading = ref(false)
 
 // ── 数据加载 ───────────────────────────────────────────────────────────────
 async function loadRoot() {
-  if (!props.sessionId || !props.workingDir) {
+  if (!props.sessionId) {
     root.value = ''
     childrenByPath.value = {}
     return
@@ -324,11 +324,11 @@ function fileIcon(name: string): string {
       </header>
 
       <NScrollbar class="ft-scroll">
-        <div v-if="!workingDir" class="ft-empty">
-          <NEmpty description="此会话未设置工作目录" size="small" />
-        </div>
-        <div v-else-if="rootLoading && rows.length === 0" class="ft-empty">
+        <div v-if="rootLoading && rows.length === 0" class="ft-empty">
           <NSpin size="small" />
+        </div>
+        <div v-else-if="!root" class="ft-empty">
+          <NEmpty description="未获取到根目录" size="small" />
         </div>
         <div v-else-if="rows.length === 0" class="ft-empty">
           <NEmpty description="空目录" size="small" />

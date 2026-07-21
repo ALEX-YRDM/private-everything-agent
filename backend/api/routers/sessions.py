@@ -2,7 +2,7 @@ from fastapi import APIRouter, HTTPException, Depends
 from pydantic import BaseModel
 from pathlib import Path
 
-from ..deps import get_agent, get_db, get_sessions
+from ..deps import get_agent, get_db, get_sessions, get_config
 
 router = APIRouter(prefix="/sessions", tags=["sessions"])
 
@@ -179,22 +179,22 @@ async def delete_trust(session_id: str, body: TrustRequest, sessions=Depends(get
 
 @router.get("/{session_id}/files")
 async def list_files(session_id: str, path: str = "", depth: int = 1,
-                     sessions=Depends(get_sessions)):
+                     sessions=Depends(get_sessions), config=Depends(get_config)):
     """
     返回指定路径下的文件/目录列表（供前端文件树使用）。
-    - path 为空时列 session.working_dir 根；否则相对 working_dir。
+    - path 为空时列会话的根目录（session.working_dir，未绑定时 fallback 到 config.workspace）
     - depth=1 只列直接子级；懒加载模式默认 depth=1。
-    - 服务端应用 .gitignore（若 working_dir 是 git 仓库根）。
-    - 校验 path 不越出 working_dir。
+    - 服务端应用 .gitignore（若根目录是 git 仓库根）。
+    - 校验 path 不越出根目录。
     """
     session = await sessions.get_session(session_id)
     if not session:
         raise HTTPException(status_code=404, detail="会话不存在")
-    root = session.get("working_dir")
+    root = session.get("working_dir") or config.workspace
     if not root:
-        raise HTTPException(status_code=400, detail="会话未设置 working_dir")
+        raise HTTPException(status_code=400, detail="工作目录未配置")
 
-    root_p = Path(root).resolve()
+    root_p = Path(root).expanduser().resolve()
     target = (root_p / path).resolve() if path else root_p
     try:
         target.relative_to(root_p)
@@ -249,23 +249,32 @@ async def list_files(session_id: str, path: str = "", depth: int = 1,
 
 # ── file content (只读预览) ────────────────────────────────────────────────
 
-def _resolve_under_root(session: dict, rel_path: str) -> Path:
-    """把会话相对路径解析为绝对路径，校验不越出 working_dir。"""
-    root = session.get("working_dir")
+def _session_root(session: dict, config) -> str:
+    """
+    解析会话的根目录：优先 working_dir，未绑定时 fallback 到 config.workspace。
+    找不到就报 400（config.workspace 默认存在，通常不会走到）。
+    """
+    root = session.get("working_dir") or config.workspace
     if not root:
-        raise HTTPException(status_code=400, detail="会话未设置 working_dir")
-    root_p = Path(root).resolve()
+        raise HTTPException(status_code=400, detail="工作目录未配置")
+    return root
+
+
+def _resolve_under_root(session: dict, config, rel_path: str) -> Path:
+    """把会话相对路径解析为绝对路径，校验不越出根目录。"""
+    root = _session_root(session, config)
+    root_p = Path(root).expanduser().resolve()
     target = (root_p / rel_path).resolve() if rel_path else root_p
     try:
         target.relative_to(root_p)
     except ValueError:
-        raise HTTPException(status_code=400, detail="路径越出 working_dir")
+        raise HTTPException(status_code=400, detail="路径越出工作目录")
     return target
 
 
 @router.get("/{session_id}/file-content")
 async def get_file_content(session_id: str, path: str, max_bytes: int = 524288,
-                           sessions=Depends(get_sessions)):
+                           sessions=Depends(get_sessions), config=Depends(get_config)):
     """读文本文件（供代码浏览器只读预览）。二进制自动识别并拒绝。"""
     session = await sessions.get_session(session_id)
     if not session:
@@ -273,7 +282,7 @@ async def get_file_content(session_id: str, path: str, max_bytes: int = 524288,
     if not path:
         raise HTTPException(status_code=400, detail="path 不能为空")
 
-    target = _resolve_under_root(session, path)
+    target = _resolve_under_root(session, config, path)
     if not target.exists():
         raise HTTPException(status_code=404, detail=f"文件不存在: {path}")
     if not target.is_file():
@@ -317,16 +326,16 @@ _SKIP_DIRS = {
 
 @router.get("/{session_id}/files/search")
 async def search_files(session_id: str, q: str = "", limit: int = 30,
-                       sessions=Depends(get_sessions)):
+                       sessions=Depends(get_sessions), config=Depends(get_config)):
     """扁平文件模糊搜索（供 @ 补全）。"""
     session = await sessions.get_session(session_id)
     if not session:
         raise HTTPException(status_code=404, detail="会话不存在")
-    root = session.get("working_dir")
+    root = session.get("working_dir") or config.workspace
     if not root:
         return {"session_id": session_id, "query": q, "results": [], "truncated": False}
 
-    root_p = Path(root).resolve()
+    root_p = Path(root).expanduser().resolve()
     q_norm = (q or "").strip().lower()
 
     # 尝试加载 .gitignore
@@ -392,19 +401,19 @@ _GIT_STATUS_TTL = 60.0  # 秒
 
 
 @router.get("/{session_id}/git-status")
-async def git_status(session_id: str, sessions=Depends(get_sessions)):
-    """返回 working_dir 的 git 分支 + porcelain 状态（60s 内存缓存）。"""
+async def git_status(session_id: str, sessions=Depends(get_sessions), config=Depends(get_config)):
+    """返回根目录的 git 分支 + porcelain 状态（60s 内存缓存）。"""
     import asyncio as _aio
     import time
 
     session = await sessions.get_session(session_id)
     if not session:
         raise HTTPException(status_code=404, detail="会话不存在")
-    root = session.get("working_dir")
+    root = session.get("working_dir") or config.workspace
     if not root:
         return {"is_git": False, "branch": None, "files": {}, "counts": {}}
 
-    root_p = Path(root).resolve()
+    root_p = Path(root).expanduser().resolve()
     cache_key = str(root_p)
     now = time.time()
     hit = _GIT_STATUS_CACHE.get(cache_key)

@@ -27,3 +27,7 @@ def get_scheduler(request: Request):
 
 def get_mcp_manager(request: Request):
     return getattr(request.app.state, "mcp_manager", None)
+
+
+def get_config(request: Request):
+    return request.app.state.config
