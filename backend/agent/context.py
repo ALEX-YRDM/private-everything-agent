@@ -52,12 +52,14 @@ class ContextBuilder:
         working_dir：会话绑定的工作目录（None 则默认为 workspace）。
         project_probe：项目探测结果，含 language/framework/git 等；None 则跳过。
         plan_mode：Plan Mode 开启时追加"只出方案不执行"的指令。
+
+        ── 装配顺序按变化频率从低到高排列，为最大化 provider 端 prefix cache 命中率 ──
+        prefix cache 从头逐 token 比对，任一位置一变，后面全 miss。因此稳定内容
+        必须尽量靠前；日期在最尾（会话级固定，同会话内稳定）。
         """
         parts = []
 
-        if plan_mode:
-            parts.append(self._plan_mode_prompt())
-
+        # ── 静态 · 极低频变化 ──────────────────────────────────────
         agents_md = self.config_dir / "AGENTS.md"
         agents_md_text = _read_config_md(agents_md)
         if agents_md_text is not None:
@@ -72,8 +74,7 @@ class ContextBuilder:
             if text is not None:
                 parts.append(f"## {fname}\n{text}")
 
-        # 项目级 AGENTS.md（若存在于 working_dir，且与全局 config_dir 不同）：
-        # 追加而不替换全局
+        # 项目级 AGENTS.md（换项目才动，追加不替换全局）
         if working_dir and working_dir.resolve() != self.config_dir.resolve():
             for fname in ("AGENTS.md", "CLAUDE.md"):
                 proj_md = working_dir / fname
@@ -82,26 +83,31 @@ class ContextBuilder:
                     parts.append(f"## 项目 {fname}({working_dir.name})\n{proj_text}")
                     break  # 优先 AGENTS.md；不同时注入两份
 
-        # 工作目录简报
-        cwd_briefing = self._build_cwd_briefing(working_dir, project_probe)
-        if cwd_briefing:
-            parts.append(cwd_briefing)
+        # Skills 摘要（新增技能才变，稳定于同一部署）
+        skills_summary = self.skills.build_skills_summary()
+        if skills_summary:
+            parts.append(skills_summary)
+
+        # ── 低频 · 记忆类（AutoCompact 触发才变） ─────────────────
+        memory_ctx = await self.memory.get_memory_context_async(session_id)
+        if memory_ctx:
+            parts.append(f"## 用户画像\n{memory_ctx}")
 
         session_summary = await self._get_session_summary(session_id)
         if session_summary:
             parts.append(f"## 本会话早期对话摘要\n{session_summary}")
 
-        memory_ctx = await self.memory.get_memory_context_async(session_id)
-        if memory_ctx:
-            parts.append(f"## 用户画像\n{memory_ctx}")
+        # ── 中频 · 会话状态类（git dirty / Plan Mode 切换） ──────
+        cwd_briefing = self._build_cwd_briefing(working_dir, project_probe)
+        if cwd_briefing:
+            parts.append(cwd_briefing)
 
-        skills_summary = self.skills.build_skills_summary()
-        if skills_summary:
-            parts.append(skills_summary)
+        if plan_mode:
+            parts.append(self._plan_mode_prompt())
 
         base_prompt = "\n\n---\n\n".join(parts)
 
-        # 添加会话级固定时间戳，用于缓存一致性
+        # 会话级固定日期（首次访问时写库，之后同会话内稳定，为 prefix cache 服务）
         session_date = await self._get_or_create_session_date(session_id)
         base_prompt = f"{base_prompt}\n\n---当前日期：{session_date}\n\n"
 
