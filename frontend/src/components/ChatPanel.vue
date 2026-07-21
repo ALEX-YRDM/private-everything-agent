@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, nextTick, watch, onMounted, onUnmounted, inject } from 'vue'
+import { ref, computed, nextTick, watch, onMounted, onUnmounted } from 'vue'
 import {
   NInput, NButton, NScrollbar, NSpin, NEmpty, NTooltip,
   NPopover, NDivider, NSwitch, NTag, NSelect,
@@ -12,17 +12,14 @@ import WorkingDirPicker from './WorkingDirPicker.vue'
 import MentionPopover, { type MentionCandidate } from './MentionPopover.vue'
 import ResizeHandle from './ResizeHandle.vue'
 import Logo from './Logo.vue'
+import AttachmentStrip from './AttachmentStrip.vue'
+import ChatHeader from './ChatHeader.vue'
 import { useChatStore } from '../stores/chat'
 import { useSettingsStore } from '../stores/settings'
 import { useLayoutStore } from '../stores/layout'
 import { useThemeStore } from '../stores/theme'
 import { api, type PromptTemplate, type ToolState } from '../api/http'
 import type { ConfirmDecision } from '../api/websocket'
-
-// App.vue provide 的三个动作
-const openScheduler = inject<() => void>('openScheduler', () => {})
-const openSettings = inject<() => void>('openSettings', () => {})
-const toggleTerminal = inject<() => void>('toggleTerminal', () => {})
 
 const chat = useChatStore()
 const settings = useSettingsStore()
@@ -571,14 +568,6 @@ watch(() => chat.pendingInsert, (v) => {
 // 供 App.vue 顶层监听 workingDir 变化
 defineExpose({ workingDir })
 
-/** chip 显示用：目录 + 文件名，太长时截断中间 */
-function shortPath(p: string): string {
-  if (p.length <= 42) return p
-  const parts = p.split('/')
-  const last = parts.pop() || p
-  return `…/${last}`
-}
-
 // ── @mention 补全 ─────────────────────────────────────────────────────────
 //
 // 在 textarea 里检测最后一个未闭合的 @<query>，弹出 MentionPopover。
@@ -727,60 +716,14 @@ function handleMentionKeydown(e: KeyboardEvent): boolean {
 <template>
   <div class="chat-panel" :class="{ 'has-working-dir': !!workingDir }">
     <!-- 顶部标题栏 -->
-    <div class="chat-header">
-      <span class="chat-title" :title="chat.currentSession?.title">
-        {{ chat.currentSession?.title || '选择或创建会话' }}
-      </span>
-      <div class="header-actions">
-        <NTooltip v-if="chat.currentSession">
-          <template #trigger>
-            <button
-              class="chip"
-              :class="{ active: !!workingDir }"
-              @click="showWorkingDirPicker = true"
-            >
-              <span class="chip-emoji">🗂</span>
-              <span class="chip-text">{{ workingDirLabel }}</span>
-            </button>
-          </template>
-          {{ workingDir ? `会话工作目录：${workingDir}` : '点击设置会话工作目录（AI 编码模式）' }}
-        </NTooltip>
-        <NTooltip v-if="contextUsage" placement="bottom">
-          <template #trigger>
-            <span class="chip context-usage" :class="{ warn: contextUsage.pct >= 60, danger: contextUsage.pct >= 80 }">
-              <span class="chip-emoji">📊</span>
-              <span class="chip-text">{{ contextUsage.pct }}%</span>
-            </span>
-          </template>
-          已使用 {{ contextUsage.used.toLocaleString() }} / {{ contextUsage.total.toLocaleString() }} tokens
-        </NTooltip>
-        <span class="header-divider" />
-        <NTooltip>
-          <template #trigger>
-            <button class="icon-btn" @click="toggleTerminal" title="打开/关闭终端">🖥</button>
-          </template>
-          {{ workingDir ? '本地终端（在 cwd 中打开）' : '需要先设置会话工作目录' }}
-        </NTooltip>
-        <NTooltip>
-          <template #trigger>
-            <button class="icon-btn" @click="theme.cycle()">{{ themeIcon }}</button>
-          </template>
-          {{ themeTip }}
-        </NTooltip>
-        <NTooltip>
-          <template #trigger>
-            <button class="icon-btn" @click="openScheduler">⏰</button>
-          </template>
-          定时任务
-        </NTooltip>
-        <NTooltip>
-          <template #trigger>
-            <button class="icon-btn" @click="openSettings">⚙️</button>
-          </template>
-          系统设置
-        </NTooltip>
-      </div>
-    </div>
+    <ChatHeader
+      :working-dir="workingDir"
+      :working-dir-label="workingDirLabel"
+      :context-usage="contextUsage"
+      :theme-icon="themeIcon"
+      :theme-tip="themeTip"
+      @open-working-dir-picker="showWorkingDirPicker = true"
+    />
 
     <!-- 消息区域 -->
     <NScrollbar ref="scrollbarRef" class="messages-area">
@@ -1018,36 +961,15 @@ function handleMentionKeydown(e: KeyboardEvent): boolean {
 
       <!-- 输入框 + 发送按钮 -->
       <div class="input-row" @drop.prevent="handleDrop" @dragover.prevent @paste="handlePaste">
-        <!-- @ 引用附件 chip 条（发一次消费一次） -->
-        <div v-if="chat.pendingAttachments.length" class="pending-attachments">
-          <div class="pa-label">📎 附加到本条：</div>
-          <div class="pa-chips">
-            <span
-              v-for="p in chat.pendingAttachments"
-              :key="p"
-              class="pa-chip"
-              :title="p"
-            >
-              <span class="pa-chip-name">{{ shortPath(p) }}</span>
-              <button class="pa-chip-x" @click="chat.removeAttachment(p)" title="移除">✕</button>
-            </span>
-            <button class="pa-clear" @click="chat.clearAttachments()">清空</button>
-          </div>
-        </div>
-        <!-- 图片预览区 -->
-        <div v-if="attachedImages.length" class="attached-images">
-          <div v-for="(img, idx) in attachedImages" :key="idx" class="attached-image-item">
-            <img :src="img" class="attached-thumb" />
-            <button class="remove-image-btn" @click="removeImage(idx)">✕</button>
-          </div>
-        </div>
-        <!-- 文件附件区 -->
-        <div v-if="attachedFiles.length" class="attached-files">
-          <div v-for="(file, idx) in attachedFiles" :key="idx" class="attached-file-item">
-            <span class="file-name">📎 {{ file.name }}</span>
-            <button class="remove-file-btn" @click="removeFile(idx)">✕</button>
-          </div>
-        </div>
+        <AttachmentStrip
+          :paths="chat.pendingAttachments"
+          :images="attachedImages"
+          :files="attachedFiles"
+          @remove-path="chat.removeAttachment"
+          @clear-paths="chat.clearAttachments"
+          @remove-image="removeImage"
+          @remove-file="removeFile"
+        />
         <div class="input-main">
           <NInput
             v-model:value="inputText"
@@ -1144,115 +1066,6 @@ function handleMentionKeydown(e: KeyboardEvent): boolean {
   position: relative;  /* 供 MentionPopover 绝对定位使用 */
 }
 
-.chat-header {
-  padding: 10px 16px;
-  border-bottom: 1px solid #ececec;
-  background: white;
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  min-height: 52px;
-}
-
-.header-actions {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  flex-shrink: 0;
-  margin-left: auto;
-}
-
-.header-divider {
-  width: 1px;
-  height: 16px;
-  background: #e5e7eb;
-  margin: 0 4px;
-}
-
-.chat-title {
-  font-weight: 600;
-  font-size: 15px;
-  color: #1f2937;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  flex: 1 1 auto;
-  min-width: 0;
-}
-
-/* 通用 chip 样式（工作目录、上下文百分比等） */
-.chip {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  border: 1px solid #e5e7eb;
-  background: #f9fafb;
-  color: #6b7280;
-  border-radius: 999px;
-  padding: 3px 10px 3px 8px;
-  font-size: 12px;
-  line-height: 18px;
-  cursor: pointer;
-  transition: border-color 0.15s, background 0.15s, color 0.15s;
-  white-space: nowrap;
-  flex-shrink: 0;
-  max-width: 220px;
-}
-.chip:hover {
-  border-color: #cbd5e1;
-  background: white;
-  color: #374151;
-}
-.chip.active {
-  color: #1677ff;
-  background: #eef4ff;
-  border-color: #bfd4ff;
-}
-.chip-emoji { font-size: 11px; line-height: 1; }
-.chip-text {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  max-width: 180px;
-}
-
-.context-usage {
-  color: #16a34a;
-  background: #f0fdf4;
-  border-color: #bbf7d0;
-  cursor: default;
-}
-.context-usage:hover { background: #f0fdf4; color: #16a34a; border-color: #bbf7d0; }
-
-.context-usage.warn {
-  color: #b45309;
-  background: #fffbeb;
-  border-color: #fde68a;
-}
-.context-usage.warn:hover { background: #fffbeb; color: #b45309; border-color: #fde68a; }
-
-.context-usage.danger {
-  color: #b91c1c;
-  background: #fef2f2;
-  border-color: #fecaca;
-}
-.context-usage.danger:hover { background: #fef2f2; color: #b91c1c; border-color: #fecaca; }
-
-/* icon 按钮（⏰ ⚙️） */
-.icon-btn {
-  width: 30px;
-  height: 30px;
-  border-radius: 8px;
-  border: none;
-  background: transparent;
-  cursor: pointer;
-  font-size: 15px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  transition: background 0.15s;
-}
-.icon-btn:hover { background: var(--md-bg-muted); color: var(--md-text-primary); }
-
 .messages-area { flex: 1; }
 .messages-container { padding: 16px 20px; min-height: 100%; }
 .empty-chat { margin-top: 60px; }
@@ -1335,155 +1148,6 @@ function handleMentionKeydown(e: KeyboardEvent): boolean {
   display: flex;
   flex-direction: column;
   gap: 8px;
-}
-
-.attached-images {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-}
-
-/* @ 附件 chip 条 */
-.pending-attachments {
-  display: flex;
-  align-items: flex-start;
-  gap: 8px;
-  padding: 6px 10px;
-  background: #f0f7ff;
-  border: 1px dashed #bfd4ff;
-  border-radius: 8px;
-  font-size: 12px;
-  color: #1e40af;
-}
-
-.pa-label {
-  flex-shrink: 0;
-  font-weight: 500;
-  color: #2563eb;
-  padding-top: 3px;
-}
-
-.pa-chips {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 4px;
-  flex: 1;
-  min-width: 0;
-}
-
-.pa-chip {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  background: white;
-  border: 1px solid #bfd4ff;
-  border-radius: 6px;
-  padding: 2px 4px 2px 8px;
-  font-family: 'SF Mono', 'Monaco', monospace;
-  font-size: 11px;
-  color: #1e40af;
-  max-width: 260px;
-}
-
-.pa-chip-name {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  flex: 1;
-  min-width: 0;
-}
-
-.pa-chip-x {
-  border: none;
-  background: transparent;
-  color: #6b7280;
-  cursor: pointer;
-  padding: 0 3px;
-  font-size: 11px;
-  border-radius: 3px;
-  flex-shrink: 0;
-}
-.pa-chip-x:hover { background: #fee2e2; color: #dc2626; }
-
-.pa-clear {
-  border: none;
-  background: transparent;
-  color: #6b7280;
-  cursor: pointer;
-  font-size: 11px;
-  padding: 2px 6px;
-  border-radius: 4px;
-  align-self: center;
-}
-.pa-clear:hover { background: rgba(37, 99, 235, 0.08); color: #2563eb; }
-
-.attached-image-item {
-  position: relative;
-  display: inline-block;
-}
-
-.attached-files {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  padding: 8px 12px;
-  background: #f5f5f5;
-  border-radius: 6px;
-  border: 1px dashed #d9d9d9;
-}
-
-.attached-file-item {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  font-size: 13px;
-  color: #595959;
-  padding: 4px 0;
-}
-
-.file-name {
-  word-break: break-all;
-  flex: 1;
-}
-
-.remove-file-btn {
-  background: transparent;
-  border: none;
-  color: #999;
-  cursor: pointer;
-  padding: 2px 4px;
-  font-size: 16px;
-}
-
-.remove-file-btn:hover {
-  color: #ff4d4f;
-}
-
-.attached-thumb {
-  width: 96px;
-  height: 96px;
-  object-fit: cover;
-  border-radius: 8px;
-  border: 1px solid #d9d9d9;
-}
-
-.remove-image-btn {
-  position: absolute;
-  top: -6px;
-  right: -6px;
-  width: 22px;
-  height: 22px;
-  border-radius: 50%;
-  border: none;
-  background: #ff4d4f;
-  color: white;
-  font-size: 12px;
-  line-height: 22px;
-  text-align: center;
-  cursor: pointer;
-  padding: 0;
-  box-shadow: 0 1px 3px rgba(0,0,0,0.2);
 }
 
 .input-main {
