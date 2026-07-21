@@ -656,3 +656,29 @@ async def set_session_todos(session_id: str, body: TodosBody, db=Depends(get_db)
     meta["todos"] = body.todos or []
     await db.set_session_metadata(session_id, meta)
     return {"session_id": session_id, "todos": meta["todos"]}
+
+
+# ── 消息编辑：从某条消息开始截断（含该条），供"编辑重发"用 ────────────────
+
+@router.delete("/{session_id}/messages/from/{message_id}")
+async def truncate_messages_from(session_id: str, message_id: int,
+                                 sessions=Depends(get_sessions), db=Depends(get_db)):
+    """
+    删除 message_id 及其之后的所有消息（用于用户编辑历史消息后重发）。
+    要求 message 属于该 session，避免跨 session 误删。
+    """
+    session = await sessions.get_session(session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="会话不存在")
+    row = await db.fetch_one(
+        "SELECT id FROM messages WHERE id = ? AND session_id = ?",
+        (message_id, session_id),
+    )
+    if not row:
+        raise HTTPException(status_code=404, detail="消息不存在")
+    result = await db.execute(
+        "DELETE FROM messages WHERE session_id = ? AND id >= ?",
+        (session_id, message_id),
+    )
+    return {"session_id": session_id, "deleted_from_id": message_id,
+            "deleted_count": result.rowcount if hasattr(result, 'rowcount') else -1}

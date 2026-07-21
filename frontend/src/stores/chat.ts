@@ -170,6 +170,40 @@ export const useChatStore = defineStore('chat', () => {
     st.todos = Array.isArray(data.todos) ? data.todos : []
   }
 
+  /**
+   * 从某条 user 消息开始截断历史 + 用新内容重发。
+   *
+   * displayMessageId 是前端消息 id（如 "msg-42"），提取尾部数字作为后端 id。
+   * 对本地临时消息（如 "user-1234567" / "streaming-*"）不生效。
+   */
+  async function editAndResendFrom(
+    displayMessageId: string,
+    newContent: string,
+  ): Promise<void> {
+    const sid = currentSessionId.value
+    if (!sid) return
+    const match = displayMessageId.match(/^msg-(\d+)$/)
+    if (!match) {
+      console.warn('该消息未持久化，无法编辑重发', displayMessageId)
+      return
+    }
+    const backendId = Number(match[1])
+    // 1. 后端删除该条及之后所有消息
+    const r = await fetch(
+      `/api/sessions/${sid}/messages/from/${backendId}`,
+      { method: 'DELETE' },
+    )
+    if (!r.ok) throw new Error(await r.text())
+
+    // 2. 本地 state 同步截断
+    const state = getSessionState(sid)
+    const idx = state.messages.findIndex(m => m.id === displayMessageId)
+    if (idx >= 0) state.messages = state.messages.slice(0, idx)
+
+    // 3. 用新内容重发（复用现有 sendMessage）
+    await sendMessage(newContent)
+  }
+
   /** 加入附件；重复路径不再加（去重）。返回是否真的加入了。 */
   function addAttachment(path: string): boolean {
     const sid = currentSessionId.value
@@ -783,6 +817,7 @@ export const useChatStore = defineStore('chat', () => {
     currentTodos,
     refreshTodos,
     saveTodos,
+    editAndResendFrom,
     requestInsertToInput,
     init,
     loadSessions,

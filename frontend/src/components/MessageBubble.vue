@@ -1,14 +1,40 @@
 <script setup lang="ts">
 import { ref, computed } from 'vue'
-import { useMessage } from 'naive-ui'
+import { useMessage, NInput, NButton } from 'naive-ui'
 import ThinkingBlock from './ThinkingBlock.vue'
 import ToolCallCard from './ToolCallCard.vue'
 import { renderMarkdown } from '../utils/markdown'
 import { copyToClipboard } from '../utils/clipboard'
 import type { DisplayMessage } from '../stores/chat'
+import { useChatStore } from '../stores/chat'
 
 const props = defineProps<{ message: DisplayMessage }>()
+
+const chat = useChatStore()
 const msg = useMessage()
+
+// 编辑态：只对已持久化的历史 user 消息（id = "msg-<int>"）开放
+const editing = ref(false)
+const editText = ref('')
+const canEdit = computed(() =>
+  props.message.role === 'user' && /^msg-\d+$/.test(props.message.id) && !chat.isStreaming,
+)
+
+function startEdit() {
+  editText.value = props.message.content || ''
+  editing.value = true
+}
+function cancelEdit() { editing.value = false }
+async function commitEdit() {
+  const text = editText.value.trim()
+  if (!text) { cancelEdit(); return }
+  editing.value = false
+  try {
+    await chat.editAndResendFrom(props.message.id, text)
+  } catch (e: any) {
+    msg.error(`重发失败：${e?.message || e}`)
+  }
+}
 
 const previewImage = ref<string | null>(null)
 const userCopied = ref(false)
@@ -123,7 +149,26 @@ async function handleMarkdownClick(e: MouseEvent) {
           <span class="uap-label">📎 引用</span>
           <code v-for="p in message.attachedPaths" :key="p" class="uap-path" :title="p">{{ p }}</code>
         </div>
-        <div class="user-content">{{ message.content }}</div>
+        <template v-if="editing">
+          <NInput
+            v-model:value="editText"
+            type="textarea"
+            :autosize="{ minRows: 2, maxRows: 10 }"
+            class="edit-input"
+            @keydown.enter.exact.prevent="commitEdit"
+            @keydown.esc="cancelEdit"
+            autofocus
+          />
+          <div class="edit-actions">
+            <NButton size="tiny" @click="cancelEdit">取消</NButton>
+            <NButton size="tiny" type="primary" @click="commitEdit">
+              重发（Enter）
+            </NButton>
+          </div>
+        </template>
+        <template v-else>
+          <div class="user-content">{{ message.content }}</div>
+        </template>
       </template>
 
       <template v-else-if="message.role === 'assistant'">
@@ -163,6 +208,13 @@ async function handleMarkdownClick(e: MouseEvent) {
         @click="copyUserMessage"
         :title="userCopied ? '已复制' : '复制到剪切板'"
       >{{ userCopied ? '✅' : '📋' }}</button>
+      <button
+        v-if="canEdit && !editing"
+        class="copy-btn edit-btn"
+        type="button"
+        @click="startEdit"
+        title="编辑并从此处重发"
+      >✏️</button>
       <span class="message-time">{{ formattedTime }}</span>
       <span
         v-if="message.role === 'assistant' && (message.inputTokens != null || message.outputTokens != null)"
@@ -300,6 +352,25 @@ async function handleMarkdownClick(e: MouseEvent) {
   white-space: pre-wrap;
   font-size: 14px;
   line-height: 1.6;
+}
+
+/* 编辑态输入框：在气泡内直接替换 user-content */
+.edit-input {
+  --n-color: rgba(255, 255, 255, 0.15) !important;
+}
+.edit-actions {
+  display: flex;
+  gap: 6px;
+  justify-content: flex-end;
+  margin-top: 6px;
+}
+
+.edit-btn {
+  opacity: 0.4;
+  transition: opacity 0.15s;
+}
+.message-wrapper:hover .edit-btn {
+  opacity: 1;
 }
 
 .copy-btn {
