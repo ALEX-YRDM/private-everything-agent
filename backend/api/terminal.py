@@ -27,7 +27,12 @@ router = APIRouter()
 
 
 async def _get_working_dir(app_state, session_id: str) -> str:
-    """从 session_manager 拿到 working_dir，否则用 $HOME"""
+    """
+    终端 cwd 解析优先级：
+    1) 会话已绑定 working_dir → 直接用
+    2) 未绑定 → 用 config.workspace（默认沙箱，与 filesystem/exec 工具一致）
+    3) 兜底 $HOME
+    """
     try:
         sessions = getattr(app_state, "session_manager", None) or app_state.agent.sessions
         session = await sessions.get_session(session_id)
@@ -35,6 +40,12 @@ async def _get_working_dir(app_state, session_id: str) -> str:
             wd = session["working_dir"]
             if Path(wd).is_dir():
                 return wd
+    except Exception:
+        pass
+    try:
+        ws = Path(app_state.config.workspace).expanduser().resolve()
+        if ws.is_dir():
+            return str(ws)
     except Exception:
         pass
     return os.path.expanduser("~")

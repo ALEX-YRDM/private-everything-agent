@@ -132,7 +132,8 @@ watch(() => props.active, (v) => {
 
 onMounted(() => {
   initTerm()
-  if (chat.currentSession?.working_dir) connect()
+  // 无论是否绑定 working_dir 都尝试连接；后端会 fallback 到默认 workspace
+  if (chat.currentSessionId) connect()
   else store.updateStatus(props.tab.id, 'idle')
 })
 

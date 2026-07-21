@@ -22,16 +22,16 @@ const instances = useTemplateRef<InstanceType<typeof TerminalTabInstance>[]>('in
 
 // 首次打开抽屉：如果一个 tab 都没有 → 自动开一个
 watch(() => layout.terminalOpen, (v) => {
-  if (v && store.tabs.length === 0 && chat.currentSession?.working_dir) {
+  if (v && store.tabs.length === 0 && chat.currentSessionId) {
     store.createTab()
   }
 })
 
-// 会话有 working_dir 时保证至少有一个 tab（可选，一般靠 open 时创建）
-const hasWD = computed(() => !!chat.currentSession?.working_dir)
+// 只要有会话就允许开终端；没绑定 working_dir 时后端自动 fallback 到默认 workspace
+const canOpen = computed(() => !!chat.currentSessionId)
 
 function newTab() {
-  if (!hasWD.value) return
+  if (!canOpen.value) return
   store.createTab()
   nextTick(() => {
     // 让新 tab 拿到焦点
@@ -120,9 +120,9 @@ function cancelRename() { editingId.value = null }
         </div>
         <NTooltip>
           <template #trigger>
-            <button class="td-newtab" @click="newTab" :disabled="!hasWD">+</button>
+            <button class="td-newtab" @click="newTab" :disabled="!canOpen">+</button>
           </template>
-          {{ hasWD ? '新建终端 tab' : '会话未设置工作目录' }}
+          {{ canOpen ? '新建终端 tab' : '请先选择一个会话' }}
         </NTooltip>
       </div>
 
@@ -156,8 +156,8 @@ function cancelRename() { editingId.value = null }
       </NTooltip>
     </div>
 
-    <div v-if="!hasWD" class="td-empty">
-      <p>此会话未设置工作目录。请先绑定一个目录，再打开终端。</p>
+    <div v-if="!canOpen" class="td-empty">
+      <p>请先在左侧选择或新建一个会话。</p>
     </div>
 
     <div v-else-if="!store.tabs.length" class="td-empty">
