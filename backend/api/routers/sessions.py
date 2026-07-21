@@ -30,6 +30,10 @@ class TrustRequest(BaseModel):
     value: str
 
 
+class SummaryBody(BaseModel):
+    summary: str
+
+
 @router.get("")
 async def list_sessions(sessions=Depends(get_sessions)):
     return {"sessions": await sessions.list_sessions()}
@@ -605,3 +609,30 @@ async def export_session(session_id: str, format: str = "md",
         media_type="text/markdown; charset=utf-8",
         headers={"Content-Disposition": f'attachment; filename*=UTF-8\'\'{filename}'},
     )
+
+
+# ── 会话摘要（AutoCompact 产物）读写 ────────────────────────────────────────
+
+@router.get("/{session_id}/summary")
+async def get_session_summary(session_id: str,
+                              sessions=Depends(get_sessions),
+                              db=Depends(get_db)):
+    session = await sessions.get_session(session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="会话不存在")
+    row = await db.fetch_one("SELECT summary FROM sessions WHERE id = ?", (session_id,))
+    return {"session_id": session_id, "summary": (row or {}).get("summary") or ""}
+
+
+@router.put("/{session_id}/summary")
+async def set_session_summary(session_id: str, body: SummaryBody,
+                              sessions=Depends(get_sessions),
+                              db=Depends(get_db)):
+    session = await sessions.get_session(session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="会话不存在")
+    await db.execute(
+        "UPDATE sessions SET summary = ? WHERE id = ?",
+        (body.summary, session_id),
+    )
+    return {"session_id": session_id, "summary": body.summary}

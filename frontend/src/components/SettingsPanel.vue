@@ -9,6 +9,7 @@ import MCPTab from './settings/MCPTab.vue'
 import SkillsTab from './settings/SkillsTab.vue'
 import TemplatesTab from './settings/TemplatesTab.vue'
 import TrustsTab from './settings/TrustsTab.vue'
+import MemoryTab from './settings/MemoryTab.vue'
 
 const settings = useSettingsStore()
 </script>
@@ -45,6 +46,9 @@ const settings = useSettingsStore()
         </NTabPane>
         <NTabPane name="trusts" tab="🛡 信任">
           <TrustsTab />
+        </NTabPane>
+        <NTabPane name="memory" tab="🧠 记忆">
+          <MemoryTab />
         </NTabPane>
       </NTabs>
     </NDrawerContent>

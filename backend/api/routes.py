@@ -12,8 +12,10 @@ from .routers.tasks import router as tasks_router
 from .routers.templates import router as templates_router
 from .routers.mcp import router as mcp_router
 from .routers.skills import router as skills_router
+from .routers.memory import router as memory_router
 
 router = APIRouter()
 for sub in [sessions_router, providers_router, models_router, tools_router,
-            tasks_router, templates_router, mcp_router, skills_router]:
+            tasks_router, templates_router, mcp_router, skills_router,
+            memory_router]:
     router.include_router(sub)
