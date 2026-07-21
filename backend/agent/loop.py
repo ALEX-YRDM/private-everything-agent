@@ -49,7 +49,7 @@ class AgentLoop:
     - SubAgent 模式（depth > 0）：并行派发、隔离执行、事件透传
     """
 
-    TOOL_RESULT_MAX_CHARS = 20000
+    TOOL_RESULT_MAX_CHARS = 40000
 
     # 按工具类型分档的截断上限（未列出的走 TOOL_RESULT_MAX_CHARS 默认值）
     # 读类工具需要看完整文件/搜索结果；执行类工具容易一次爆炸（find /、日志 tail）
