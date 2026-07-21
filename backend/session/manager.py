@@ -136,6 +136,11 @@ class SessionManager:
         """
         返回用于 LLM 调用的历史消息。
         只返回未被整合的消息，并确保从 user turn 开始对齐。
+
+        同时对孤儿 tool_calls 做修复：若某条 assistant 声明了 tool_calls，
+        但后续缺少对应 tool_call_id 的 tool 消息（常见于用户刷新页面/断线时，
+        破坏性工具还在等待确认，assistant 消息已落盘但 tool 响应未生成），
+        补一条合成的 tool 消息占位，避免 OpenAI 兼容 API 400。
         """
         messages = await self.db.fetch_all(
             """SELECT role, content, tool_calls, tool_call_id, tool_name, files
@@ -170,7 +175,51 @@ class SessionManager:
                     msg["tool_call_id"] = m["tool_call_id"]
                     msg["name"] = m["tool_name"]
                 result.append(msg)
-        return result
+
+        return self._patch_orphan_tool_calls(result)
+
+    @staticmethod
+    def _patch_orphan_tool_calls(messages: list[dict]) -> list[dict]:
+        """
+        扫描消息序列，对每条声明了 tool_calls 的 assistant，
+        校验后续是否为每个 tool_call_id 都有对应 role="tool" 响应；
+        缺失的补一条合成占位消息，保证 OpenAI 协议合规。
+
+        真实的响应必然紧跟在 assistant 后面（loop 里每个 tool 完成就 append），
+        所以处理策略是：消费完紧邻的 role="tool" 块 → 剩下的 id 就在该块末尾补占位。
+        """
+        patched: list[dict] = []
+        i = 0
+        while i < len(messages):
+            m = messages[i]
+            patched.append(m)
+            if m.get("role") == "assistant" and m.get("tool_calls"):
+                # 收集本 assistant 声明的所有 pending id → name
+                pending: dict[str, str] = {}
+                for tc in m["tool_calls"]:
+                    tc_id = tc.get("id")
+                    if not tc_id:
+                        continue
+                    fn = tc.get("function") or {}
+                    pending[tc_id] = fn.get("name") or tc.get("name") or "unknown"
+                # 消费紧邻的 tool 响应
+                j = i + 1
+                while j < len(messages) and messages[j].get("role") == "tool":
+                    patched.append(messages[j])
+                    pending.pop(messages[j].get("tool_call_id"), None)
+                    j += 1
+                # 剩下的 id 补占位（保持声明顺序）
+                for tc_id, tc_name in pending.items():
+                    patched.append({
+                        "role": "tool",
+                        "tool_call_id": tc_id,
+                        "name": tc_name,
+                        "content": "[连接断开或任务中断，此工具调用未执行]",
+                    })
+                i = j
+            else:
+                i += 1
+        return patched
 
     async def get_messages_for_display(self, session_id: str) -> list[dict]:
         """返回用于前端展示的所有消息（包括已整合的）。"""

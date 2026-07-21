@@ -177,3 +177,97 @@ class TestMdCache:
         os.utime(md, (stat.st_atime, stat.st_mtime + 1))
 
         assert _read_config_md(md) == "v2"
+
+
+class TestOrphanToolCallPatch:
+    """回归：断线时 assistant.tool_calls 已落盘但 tool 响应未生成，
+    下一次调用必须能自愈，不能把孤儿 tool_call 喂给 provider 触发 400。"""
+
+    def test_orphan_tool_call_is_patched(self):
+        from backend.session.manager import SessionManager
+        messages = [
+            {"role": "user", "content": "hi"},
+            {"role": "assistant", "tool_calls": [
+                {"id": "call_1", "type": "function",
+                 "function": {"name": "exec", "arguments": "{}"}},
+            ]},
+        ]
+        patched = SessionManager._patch_orphan_tool_calls(messages)
+        assert len(patched) == 3
+        tail = patched[-1]
+        assert tail["role"] == "tool"
+        assert tail["tool_call_id"] == "call_1"
+        assert tail["name"] == "exec"
+        assert "未执行" in tail["content"]
+
+    def test_intact_tool_call_untouched(self):
+        from backend.session.manager import SessionManager
+        messages = [
+            {"role": "user", "content": "hi"},
+            {"role": "assistant", "tool_calls": [
+                {"id": "call_1", "type": "function",
+                 "function": {"name": "exec", "arguments": "{}"}},
+            ]},
+            {"role": "tool", "tool_call_id": "call_1", "name": "exec", "content": "ok"},
+        ]
+        patched = SessionManager._patch_orphan_tool_calls(messages)
+        assert patched == messages
+
+    def test_partial_orphan_only_patches_missing(self):
+        """两个 tool_call，只有一个有响应 → 只补另一个。"""
+        from backend.session.manager import SessionManager
+        messages = [
+            {"role": "user", "content": "hi"},
+            {"role": "assistant", "tool_calls": [
+                {"id": "call_1", "type": "function",
+                 "function": {"name": "read_file", "arguments": "{}"}},
+                {"id": "call_2", "type": "function",
+                 "function": {"name": "exec", "arguments": "{}"}},
+            ]},
+            {"role": "tool", "tool_call_id": "call_1", "name": "read_file", "content": "..."},
+        ]
+        patched = SessionManager._patch_orphan_tool_calls(messages)
+        # 顺序：user, assistant, tool(call_1 已有), tool(call_2 补齐)
+        assert len(patched) == 4
+        assert patched[3]["role"] == "tool"
+        assert patched[3]["tool_call_id"] == "call_2"
+        assert patched[3]["name"] == "exec"
+
+    def test_flat_shape_tool_call_name_fallback(self):
+        """兼容旧数据可能扁平存 {name, arguments}。"""
+        from backend.session.manager import SessionManager
+        messages = [
+            {"role": "user", "content": "hi"},
+            {"role": "assistant", "tool_calls": [
+                {"id": "call_1", "name": "exec", "arguments": "{}"},
+            ]},
+        ]
+        patched = SessionManager._patch_orphan_tool_calls(messages)
+        assert patched[-1]["name"] == "exec"
+
+
+class TestStripThinkTags:
+    """标题生成时部分模型会把 reasoning 泄到 content 里（DeepSeek-R1 等）。"""
+
+    def test_full_think_block_removed(self):
+        from backend.agent.loop import _strip_think_tags
+        text = "<think>\nLet me think...\n多行推理\n</think>\n简单问候互动"
+        assert _strip_think_tags(text) == "简单问候互动"
+
+    def test_unclosed_think_dropped_to_eof(self):
+        """有开无闭：从 <think> 到末尾都丢，避免半截推理泄漏。"""
+        from backend.agent.loop import _strip_think_tags
+        text = "友好问候<think>没写完就被截断"
+        assert _strip_think_tags(text) == "友好问候"
+
+    def test_no_think_untouched(self):
+        from backend.agent.loop import _strip_think_tags
+        assert _strip_think_tags("普通标题") == "普通标题"
+
+    def test_stray_close_tag_removed(self):
+        from backend.agent.loop import _strip_think_tags
+        assert _strip_think_tags("标题</think>") == "标题"
+
+    def test_empty_input(self):
+        from backend.agent.loop import _strip_think_tags
+        assert _strip_think_tags("") == ""
