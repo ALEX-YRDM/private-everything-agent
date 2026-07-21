@@ -4,6 +4,7 @@ import { useChatStore } from '../stores/chat'
 import { useLayoutStore, COLLAPSED_WIDTH } from '../stores/layout'
 import { NButton, NInput, NPopconfirm, NTooltip, NScrollbar } from 'naive-ui'
 import ResizeHandle from './ResizeHandle.vue'
+import Logo from './Logo.vue'
 
 const chat = useChatStore()
 const layout = useLayoutStore()
@@ -53,6 +54,38 @@ const filteredSessions = computed(() => {
   return sorted.filter((s) => s.title.toLowerCase().includes(q))
 })
 
+/** 把会话按时间分组：今天 / 昨天 / 本周 / 更早 */
+type GroupKey = '今天' | '昨天' | '本周' | '更早'
+const GROUP_ORDER: readonly GroupKey[] = ['今天', '昨天', '本周', '更早'] as const
+
+const groupedSessions = computed(() => {
+  const now = new Date()
+  const startOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime()
+  const startOfYesterday = startOfDay - 24 * 3600 * 1000
+  // 本周从周一 0 点算起（getDay 里周日=0，处理成周一起点）
+  const dow = (now.getDay() + 6) % 7
+  const startOfWeek = startOfDay - dow * 24 * 3600 * 1000
+
+  const groups: Record<GroupKey, typeof filteredSessions.value> = {
+    今天: [],
+    昨天: [],
+    本周: [],
+    更早: [],
+  }
+
+  for (const s of filteredSessions.value) {
+    const t = new Date(s.updated_at ?? s.created_at).getTime()
+    if (t >= startOfDay) groups.今天.push(s)
+    else if (t >= startOfYesterday) groups.昨天.push(s)
+    else if (t >= startOfWeek) groups.本周.push(s)
+    else groups.更早.push(s)
+  }
+
+  return GROUP_ORDER
+    .filter((k) => groups[k].length > 0)
+    .map((k) => ({ label: k, items: groups[k] }))
+})
+
 async function toggleSubSessions(sessionId: string) {
   if (expandedSubSessions.value.has(sessionId)) {
     expandedSubSessions.value.delete(sessionId)
@@ -71,13 +104,13 @@ async function toggleSubSessions(sessionId: string) {
   >
     <!-- 折叠态：一条竖条 -->
     <div v-if="layout.leftCollapsed" class="collapsed-bar" @click="layout.toggleLeft()" title="展开会话列表">
-      <span class="collapsed-icon">💬</span>
+      <Logo variant="mark" :size="26" />
       <span class="collapsed-hint">›</span>
     </div>
 
     <template v-else>
       <div class="session-header">
-        <span class="header-title">会话</span>
+        <Logo variant="full" :size="42" class="brand-logo" />
         <div class="header-btns">
           <NTooltip>
             <template #trigger>
@@ -106,13 +139,15 @@ async function toggleSubSessions(sessionId: string) {
       </div>
 
       <NScrollbar class="sessions-scroll">
-        <template v-for="session in filteredSessions" :key="session.id">
-          <!-- 主 Session 行 -->
-          <div
-            class="session-item"
-            :class="{ active: chat.currentSessionId === session.id }"
-            @click="chat.switchSession(session.id)"
-          >
+        <template v-for="group in groupedSessions" :key="group.label">
+          <div class="group-header">{{ group.label }}</div>
+          <template v-for="session in group.items" :key="session.id">
+            <!-- 主 Session 行 -->
+            <div
+              class="session-item"
+              :class="{ active: chat.currentSessionId === session.id }"
+              @click="chat.switchSession(session.id)"
+            >
             <template v-if="editingId === session.id">
               <NInput
                 v-model:value="editingTitle"
@@ -175,6 +210,7 @@ async function toggleSubSessions(sessionId: string) {
             </div>
           </template>
         </template>
+        </template>
 
         <div v-if="filteredSessions.length === 0" class="empty-state">
           <template v-if="searchQuery">
@@ -222,6 +258,7 @@ async function toggleSubSessions(sessionId: string) {
   transition: background 0.15s;
 }
 .collapsed-bar:hover { background: #f0f0f0; }
+.collapsed-bar { color: #1677ff; }
 .collapsed-icon { font-size: 16px; }
 .collapsed-hint {
   color: #9ca3af;
@@ -233,8 +270,13 @@ async function toggleSubSessions(sessionId: string) {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 16px 14px 12px;
+  padding: 14px 14px 12px;
   border-bottom: 1px solid #e8e8e8;
+}
+
+.brand-logo {
+  color: #1677ff;
+  flex-shrink: 0;
 }
 
 .header-title {
@@ -273,6 +315,18 @@ async function toggleSubSessions(sessionId: string) {
 
 .sessions-scroll {
   flex: 1;
+  min-height: 0;
+  padding: 8px 6px;
+}
+
+.group-header {
+  padding: 10px 8px 4px;
+  font-size: 10.5px;
+  font-weight: 600;
+  color: var(--md-text-muted);
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  user-select: none;
 }
 
 .session-item {

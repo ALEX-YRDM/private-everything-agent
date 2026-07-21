@@ -1,0 +1,27 @@
+<svg
+  xmlns="http://www.w3.org/2000/svg"
+  viewBox="0 0 64 64"
+  fill="none"
+>
+  <!--
+    favicon 变体：给一个填充背景 + 白色图形，浏览器 tab 里显眼
+  -->
+  <defs>
+    <linearGradient id="fav-bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#1677ff" />
+      <stop offset="100%" stop-color="#6247aa" />
+    </linearGradient>
+  </defs>
+  <rect x="0" y="0" width="64" height="64" rx="14" fill="url(#fav-bg)" />
+  <g stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" fill="rgba(255,255,255,0.18)">
+    <path d="M32 32 C 20 14, 10 20, 12 30 C 14 39, 23 37, 32 32 Z" />
+    <path d="M32 32 C 44 14, 54 20, 52 30 C 50 39, 41 37, 32 32 Z" />
+    <path d="M32 32 C 23 42, 16 49, 22 53 C 27 55, 30 48, 32 42 Z" />
+    <path d="M32 32 C 41 42, 48 49, 42 53 C 37 55, 34 48, 32 42 Z" />
+    <path d="M32 20 L 32 46" stroke-width="2.4" fill="none" />
+    <path d="M32 20 C 30 16, 28 14, 26 13" fill="none" />
+    <path d="M32 20 C 34 16, 36 14, 38 13" fill="none" />
+  </g>
+  <circle cx="26" cy="13" r="1.4" fill="#fff" />
+  <circle cx="38" cy="13" r="1.4" fill="#fff" />
+</svg>

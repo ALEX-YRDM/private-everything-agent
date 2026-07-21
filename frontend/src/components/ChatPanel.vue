@@ -10,8 +10,11 @@ import SubAgentBlock from './SubAgentBlock.vue'
 import ToolConfirmDialog from './ToolConfirmDialog.vue'
 import WorkingDirPicker from './WorkingDirPicker.vue'
 import MentionPopover, { type MentionCandidate } from './MentionPopover.vue'
+import ResizeHandle from './ResizeHandle.vue'
+import Logo from './Logo.vue'
 import { useChatStore } from '../stores/chat'
 import { useSettingsStore } from '../stores/settings'
+import { useLayoutStore } from '../stores/layout'
 import { api, type PromptTemplate, type ToolState } from '../api/http'
 import type { ConfirmDecision } from '../api/websocket'
 
@@ -22,10 +25,21 @@ const toggleTerminal = inject<() => void>('toggleTerminal', () => {})
 
 const chat = useChatStore()
 const settings = useSettingsStore()
+const layout = useLayoutStore()
 const message = useMessage()
 const inputText = ref('')
 const scrollbarRef = ref<InstanceType<typeof NScrollbar> | null>(null)
 const fileInputRef = ref<HTMLInputElement | null>(null)
+
+// ── 输入框高度拖拽 ───────────────────────────────────────────────────────────
+// handle 位于输入区顶部，向上拖 → 高度增加（因此 delta 取反）
+let inputHeightStart = 0
+function onInputResizeStart() {
+  inputHeightStart = layout.inputHeight
+}
+function onInputResize(delta: number) {
+  layout.setInputHeight(inputHeightStart - delta)
+}
 
 // ── 图片附件 ─────────────────────────────────────────────────────────────────
 const MAX_IMAGE_SIZE = 10 * 1024 * 1024  // 10 MB
@@ -709,7 +723,7 @@ function handleMentionKeydown(e: KeyboardEvent): boolean {
         <span class="header-divider" />
         <NTooltip>
           <template #trigger>
-            <button class="icon-btn" :class="{ active: !!workingDir }" @click="toggleTerminal" :disabled="!workingDir">🖥</button>
+            <button class="icon-btn" @click="toggleTerminal" title="打开/关闭终端">🖥</button>
           </template>
           {{ workingDir ? '本地终端（在 cwd 中打开）' : '需要先设置会话工作目录' }}
         </NTooltip>
@@ -771,6 +785,12 @@ function handleMentionKeydown(e: KeyboardEvent): boolean {
 
     <!-- 输入区域 -->
     <div class="input-area" v-if="chat.currentSessionId">
+      <!-- 顶部拖拽 handle：向上拖增加输入框高度 -->
+      <ResizeHandle
+        side="top"
+        @resize-start="onInputResizeStart"
+        @resize="onInputResize"
+      />
       <!-- 工具栏：会话模型 + 模板选择 + 工具开关 -->
       <div class="input-toolbar">
 
@@ -987,9 +1007,9 @@ function handleMentionKeydown(e: KeyboardEvent): boolean {
           <NInput
             v-model:value="inputText"
             type="textarea"
-            :autosize="{ minRows: 4, maxRows: 16 }"
             :placeholder="chat.isStreaming ? '等待响应完成…' : '发送消息（Enter 发送，Shift+Enter 换行；输入 @ 可引用文件）'"
             :disabled="chat.isStreaming"
+            :style="{ height: layout.inputHeight + 'px' }"
             @keydown="handleKeydown"
             @input="onInputChange"
             @focus="onInputChange"
@@ -1037,7 +1057,14 @@ function handleMentionKeydown(e: KeyboardEvent): boolean {
     </div>
 
     <div v-else class="no-session-hint">
-      请从左侧选择或创建一个会话
+      <Logo variant="mark" :size="72" class="hint-logo" />
+      <h2 class="hint-title">梦蝶</h2>
+      <p class="hint-subtitle">本地个人 AI Agent · 从左侧新建或选择一个会话开始</p>
+      <div class="hint-actions">
+        <NButton type="primary" size="small" @click="chat.createSession()">
+          + 新建会话
+        </NButton>
+      </div>
     </div>
 
     <!-- 工作目录选择器 -->
@@ -1206,6 +1233,7 @@ function handleMentionKeydown(e: KeyboardEvent): boolean {
 }
 
 .input-area {
+  position: relative;
   border-top: 1px solid #e8e8e8;
   padding: 10px 20px 16px;
 }
@@ -1408,12 +1436,21 @@ function handleMentionKeydown(e: KeyboardEvent): boolean {
 
 .message-input { flex: 1; }
 
-/* 让 NInput textarea 支持手动拖拽调整高度 */
+/* 输入框高度由 layout.inputHeight 控制；textarea 撑满外壳 */
+.message-input :deep(.n-input__textarea-el),
 .message-input :deep(textarea) {
-  resize: vertical;
-  min-height: 100px;
+  height: 100% !important;
+  min-height: 0 !important;
+  max-height: none !important;
+  resize: none;
   font-size: 14px;
   line-height: 1.6;
+}
+.message-input :deep(.n-input__textarea) {
+  height: 100%;
+}
+.message-input :deep(.n-input-wrapper) {
+  height: 100%;
 }
 
 /* 发送/停止按钮加大 */
@@ -1424,10 +1461,33 @@ function handleMentionKeydown(e: KeyboardEvent): boolean {
 .no-session-hint {
   flex: 1;
   display: flex;
+  flex-direction: column;
   align-items: center;
   justify-content: center;
-  color: #aaa;
+  color: #64748b;
   font-size: 14px;
+  gap: 10px;
+  padding: 40px 20px;
+}
+.hint-logo {
+  color: #1677ff;
+  opacity: 0.9;
+  filter: drop-shadow(0 4px 16px rgba(22, 119, 255, 0.15));
+}
+.hint-title {
+  font-size: 22px;
+  font-weight: 600;
+  color: #0f172a;
+  margin: 6px 0 0;
+  letter-spacing: 4px;
+}
+.hint-subtitle {
+  color: #94a3b8;
+  font-size: 13px;
+  margin: 0 0 6px;
+}
+.hint-actions {
+  margin-top: 8px;
 }
 
 /* 模板选择器 */

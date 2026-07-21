@@ -158,64 +158,94 @@ const resultLang = computed<string | undefined>(() => {
 
 <style scoped>
 .tool-card {
-  border: 1px solid #e0e0e0;
-  border-radius: 8px;
-  margin-bottom: 6px;
+  position: relative;
+  border: 1px solid var(--md-border-soft);
+  border-radius: var(--md-radius-md);
+  margin-bottom: 8px;
   overflow: hidden;
+  background: var(--md-bg);
+  transition: box-shadow 0.15s ease, border-color 0.15s ease;
+}
+
+.tool-card:hover {
+  box-shadow: var(--md-shadow-sm);
+}
+
+/* 左侧状态色条 */
+.tool-card::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 3px;
+  background: var(--md-brand);
+  transition: background 0.2s ease;
+}
+
+.tool-card.done::before {
+  background: var(--md-success);
+}
+
+.tool-card.running::before {
+  background: var(--md-warning);
 }
 
 .tool-card.done {
-  border-color: #d0e8d0;
+  border-color: #d1fae5;
 }
 
 .tool-card.running {
-  border-color: #ffd57a;
+  border-color: #fde68a;
 }
 
 .tool-header {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 8px 12px;
+  padding: 8px 12px 8px 15px;
   cursor: pointer;
-  background: #f9f9f9;
+  background: var(--md-bg-subtle);
   font-size: 13px;
   user-select: none;
+  transition: background 0.15s ease;
 }
 
 .tool-card.done .tool-header {
-  background: #f0f8f0;
+  background: linear-gradient(90deg, var(--md-success-soft) 0%, rgba(240, 253, 244, 0.4) 60%, var(--md-bg) 100%);
 }
 
 .tool-card.running .tool-header {
-  background: #fffbf0;
+  background: linear-gradient(90deg, var(--md-warning-soft) 0%, rgba(254, 249, 195, 0.4) 60%, var(--md-bg) 100%);
 }
 
 .tool-header:hover {
-  filter: brightness(0.97);
+  filter: brightness(0.98);
 }
 
 .tool-name {
   flex: 1;
   font-weight: 600;
-  font-family: 'SF Mono', 'Monaco', 'Cascadia Code', monospace;
+  font-family: var(--md-font-mono);
   font-size: 12px;
+  color: var(--md-text-primary);
 }
 
 .status-badge {
-  font-size: 11px;
-  padding: 2px 7px;
+  font-size: 10.5px;
+  padding: 2px 8px;
   border-radius: 10px;
+  font-weight: 500;
 }
 
 .status-badge.done {
-  background: #d4edda;
-  color: #155724;
+  background: var(--md-success-soft);
+  color: var(--md-success);
 }
 
 .status-badge.running {
-  background: #fff3cd;
-  color: #856404;
+  background: var(--md-warning-soft);
+  color: var(--md-warning);
 }
 
 .toggle-icon {

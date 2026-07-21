@@ -191,7 +191,20 @@ async function handleMarkdownClick(e: MouseEvent) {
 .message-wrapper {
   display: flex;
   flex-direction: column;
-  margin-bottom: 16px;
+  margin-bottom: 18px;
+  /* 消息进入动画 */
+  animation: msg-in 220ms cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+@keyframes msg-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
 }
 
 .message-wrapper.user {
@@ -208,10 +221,11 @@ async function handleMarkdownClick(e: MouseEvent) {
 
 .message-bubble.error {
   max-width: 100%;
-  background: #fff2f0;
-  border: 1px solid #ffccc7;
-  color: #a8071a;
-  border-radius: 8px;
+  background: linear-gradient(180deg, #fff5f5 0%, #fff2f0 100%);
+  border: 1px solid #fecaca;
+  color: #991b1b;
+  border-radius: 10px;
+  box-shadow: var(--md-shadow-sm);
 }
 
 .error-content {
@@ -239,7 +253,7 @@ async function handleMarkdownClick(e: MouseEvent) {
 
 .error-hint {
   font-size: 12px;
-  color: #a8071a;
+  color: #991b1b;
   background: rgba(255, 255, 255, 0.55);
   border-radius: 4px;
   padding: 4px 8px;
@@ -252,27 +266,34 @@ async function handleMarkdownClick(e: MouseEvent) {
   line-height: 1.6;
   word-break: break-word;
   white-space: pre-wrap;
-  font-family: 'SF Mono', 'Monaco', 'Cascadia Code', monospace;
+  font-family: var(--md-font-mono);
 }
 
 .message-bubble {
-  max-width: 80%;
-  border-radius: 12px;
-  padding: 10px 14px;
+  max-width: 82%;
+  border-radius: 14px;
+  padding: 11px 15px;
   word-break: break-word;
+  box-shadow: var(--md-shadow-sm);
+  transition: box-shadow 0.15s ease;
+}
+.message-bubble:hover {
+  box-shadow: var(--md-shadow-md);
 }
 
 .message-bubble.user {
-  background: #1677ff;
+  background: linear-gradient(180deg, #1677ff 0%, #0958d9 100%);
   color: white;
   border-bottom-right-radius: 4px;
 }
 
 .message-bubble.assistant {
-  background: #f5f5f5;
-  color: #1a1a1a;
+  background: #ffffff;
+  color: var(--md-text-primary);
+  border: 1px solid var(--md-border-soft);
   border-bottom-left-radius: 4px;
   min-width: 100px;
+  box-shadow: var(--md-shadow-sm);
 }
 
 .user-content {

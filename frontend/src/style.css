@@ -1,1 +1,58 @@
-/* 全局样式由 App.vue 中的 <style> 处理 */
+/**
+ * 全局设计 token 与字体栈。
+ * 组件内部不直接引用具体色值时，通过 var(--md-*) 拿主题色。
+ */
+:root {
+  /* 品牌色（梦蝶蓝紫渐变） */
+  --md-brand: #1677ff;
+  --md-brand-soft: #e6f0ff;
+  --md-brand-strong: #0958d9;
+
+  /* 中性色（浅色 UI） */
+  --md-bg: #ffffff;
+  --md-bg-subtle: #fafbfc;
+  --md-bg-muted: #f5f7fa;
+  --md-border: #e5e7eb;
+  --md-border-soft: #f0f2f5;
+  --md-text-primary: #0f172a;
+  --md-text-secondary: #475569;
+  --md-text-muted: #94a3b8;
+
+  /* 语义色 */
+  --md-success: #16a34a;
+  --md-success-soft: #dcfce7;
+  --md-warning: #d97706;
+  --md-warning-soft: #fef3c7;
+  --md-danger: #dc2626;
+  --md-danger-soft: #fee2e2;
+  --md-info: #0284c7;
+  --md-info-soft: #e0f2fe;
+
+  /* 阴影 */
+  --md-shadow-sm: 0 1px 2px rgba(15, 23, 42, 0.05);
+  --md-shadow-md: 0 4px 12px rgba(15, 23, 42, 0.08);
+  --md-shadow-lg: 0 12px 32px rgba(15, 23, 42, 0.12);
+
+  /* 圆角 */
+  --md-radius-sm: 4px;
+  --md-radius-md: 8px;
+  --md-radius-lg: 12px;
+
+  /* 字体栈 */
+  --md-font-sans:
+    'Inter', 'PingFang SC', 'HarmonyOS Sans SC', 'Microsoft YaHei',
+    -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  --md-font-mono:
+    'JetBrains Mono', 'Fira Code', 'SF Mono', Menlo, Monaco, Consolas,
+    'Liberation Mono', 'Courier New', monospace;
+}
+
+html, body, #app {
+  font-family: var(--md-font-sans);
+  font-feature-settings: 'cv02', 'cv03', 'cv04', 'cv11'; /* Inter 更好的字形 */
+  color: var(--md-text-primary);
+}
+
+code, pre, .mono, kbd {
+  font-family: var(--md-font-mono);
+}
