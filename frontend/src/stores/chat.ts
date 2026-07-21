@@ -83,6 +83,34 @@ export const useChatStore = defineStore('chat', () => {
   const sessionStates = ref<Record<string, SessionState>>({})
   const wsMap = new Map<string, AgentWebSocket>()
 
+  /**
+   * WS LRU 保留策略：最多保留 WS_KEEP_ALIVE 条活连接，
+   * 保证"后台任务通知"仍然可到达最近使用的会话；超出的老连接主动 close。
+   * 切回旧会话时 sendMessage/connectWS 会 lazy 重连。
+   */
+  const WS_KEEP_ALIVE = 3
+  const wsAccessOrder: string[] = []  // 最近 → 最早
+
+  function touchWs(sessionId: string) {
+    const idx = wsAccessOrder.indexOf(sessionId)
+    if (idx >= 0) wsAccessOrder.splice(idx, 1)
+    wsAccessOrder.unshift(sessionId)
+    while (wsAccessOrder.length > WS_KEEP_ALIVE) {
+      const evict = wsAccessOrder.pop()!
+      if (evict === sessionId) continue
+      const w = wsMap.get(evict)
+      if (w) {
+        try { w.disconnect() } catch { /* ignore */ }
+        wsMap.delete(evict)
+      }
+    }
+  }
+
+  function forgetWs(sessionId: string) {
+    const idx = wsAccessOrder.indexOf(sessionId)
+    if (idx >= 0) wsAccessOrder.splice(idx, 1)
+  }
+
   /** 每当任务工具执行完毕，此计数器 +1，供 SchedulerPanel 监听刷新。 */
   const tasksChangedAt = ref(0)
   /** 最近一次收到的定时任务广播通知（App.vue 监听并显示 toast）。 */
@@ -180,6 +208,7 @@ export const useChatStore = defineStore('chat', () => {
     sessions.value = sessions.value.filter((s) => s.id !== id)
     wsMap.get(id)?.disconnect()
     wsMap.delete(id)
+    forgetWs(id)
     delete sessionStates.value[id]
 
     if (currentSessionId.value === id) {
@@ -204,6 +233,8 @@ export const useChatStore = defineStore('chat', () => {
   async function switchSession(id: string) {
     if (currentSessionId.value === id) return
     currentSessionId.value = id
+    // 提前占位：即使还没建 WS，也保证 LRU 把当前会话放到最近位置
+    touchWs(id)
 
     const state = getSessionState(id)
     // 只有未加载过才从 API 拉取，已加载（包括正在流式中的）直接复用
@@ -345,10 +376,14 @@ export const useChatStore = defineStore('chat', () => {
 
   function connectWS(sessionId: string) {
     const existing = wsMap.get(sessionId)
-    if (existing?.isConnected) return
+    if (existing?.isConnected) {
+      touchWs(sessionId)
+      return
+    }
 
     const ws = new AgentWebSocket(sessionId)
     wsMap.set(sessionId, ws)
+    touchWs(sessionId)
 
     ws.connect(
       (event) => handleStreamEvent(sessionId, event),
@@ -356,6 +391,7 @@ export const useChatStore = defineStore('chat', () => {
         // WS 关闭时，将未完成的流式消息保存下来
         flushStreamingMessage(sessionId)
         wsMap.delete(sessionId)
+        forgetWs(sessionId)
       }
     ).catch((e) => console.error('WebSocket 连接失败', e))
   }
@@ -626,11 +662,13 @@ export const useChatStore = defineStore('chat', () => {
     if (!ws || !ws.isConnected) {
       ws = new AgentWebSocket(sessionId)
       wsMap.set(sessionId, ws)
+      touchWs(sessionId)
       await ws.connect(
         (event) => handleStreamEvent(sessionId, event),
         () => {
           flushStreamingMessage(sessionId)
           wsMap.delete(sessionId)
+          forgetWs(sessionId)
         }
       )
     }

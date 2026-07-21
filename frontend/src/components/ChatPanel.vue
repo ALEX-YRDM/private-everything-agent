@@ -15,6 +15,7 @@ import Logo from './Logo.vue'
 import { useChatStore } from '../stores/chat'
 import { useSettingsStore } from '../stores/settings'
 import { useLayoutStore } from '../stores/layout'
+import { useThemeStore } from '../stores/theme'
 import { api, type PromptTemplate, type ToolState } from '../api/http'
 import type { ConfirmDecision } from '../api/websocket'
 
@@ -26,6 +27,14 @@ const toggleTerminal = inject<() => void>('toggleTerminal', () => {})
 const chat = useChatStore()
 const settings = useSettingsStore()
 const layout = useLayoutStore()
+const theme = useThemeStore()
+
+const themeIcon = computed(() =>
+  theme.mode === 'dark' ? '🌙' : theme.mode === 'light' ? '☀️' : '🖥',
+)
+const themeTip = computed(() =>
+  `主题：${theme.mode}（点击循环：浅色 → 深色 → 跟随系统）`,
+)
 const message = useMessage()
 const inputText = ref('')
 const scrollbarRef = ref<InstanceType<typeof NScrollbar> | null>(null)
@@ -729,6 +738,12 @@ function handleMentionKeydown(e: KeyboardEvent): boolean {
         </NTooltip>
         <NTooltip>
           <template #trigger>
+            <button class="icon-btn" @click="theme.cycle()">{{ themeIcon }}</button>
+          </template>
+          {{ themeTip }}
+        </NTooltip>
+        <NTooltip>
+          <template #trigger>
             <button class="icon-btn" @click="openScheduler">⏰</button>
           </template>
           定时任务
@@ -1206,7 +1221,7 @@ function handleMentionKeydown(e: KeyboardEvent): boolean {
   justify-content: center;
   transition: background 0.15s;
 }
-.icon-btn:hover { background: #f3f4f6; }
+.icon-btn:hover { background: var(--md-bg-muted); color: var(--md-text-primary); }
 
 .messages-area { flex: 1; }
 .messages-container { padding: 16px 20px; min-height: 100%; }

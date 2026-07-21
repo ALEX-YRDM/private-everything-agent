@@ -31,12 +31,14 @@ const toolCallEvents = computed(() => {
   return [...byId.values()]
 })
 
-// 每个工具调用对应的结果（若已到达）
-const toolResultsMap = computed(() => {
+// 每个工具调用对应的结果预览。key 缺失时返回 undefined，模板里做条件渲染。
+// 值本身直接是"预览字符串"，方便模板一处使用。
+const toolResultPreviews = computed(() => {
   const map: Record<string, string> = {}
   for (const e of props.subAgent.events) {
     if (e.type === 'tool_result' && e.id) {
-      map[e.id] = e.content ?? ''
+      const s = e.content ?? ''
+      map[e.id] = s.length <= 200 ? s : `${s.slice(0, 200)}…（共 ${s.length} 字符）`
     }
   }
   return map
@@ -99,15 +101,13 @@ const accumulatedContent = computed(() =>
               <span v-else-if="Object.keys(tc.args).length > 0" class="tool-call-args">
                 {{ JSON.stringify(tc.args).slice(0, 80) }}{{ JSON.stringify(tc.args).length > 80 ? '…' : '' }}
               </span>
-              <span v-if="toolResultsMap[tc.id] !== undefined" class="tool-call-status done">✓</span>
+              <span v-if="toolResultPreviews[tc.id]" class="tool-call-status done">✓</span>
               <span v-else class="tool-call-status pending">…</span>
             </div>
             <!-- 工具结果预览：短则完整展示，长则截断 200 字符 -->
-            <div v-if="toolResultsMap[tc.id] !== undefined" class="tool-call-result">
+            <div v-if="toolResultPreviews[tc.id]" class="tool-call-result">
               <span class="result-arrow">↳</span>
-              <span class="result-text">
-                {{ toolResultsMap[tc.id].slice(0, 200) }}{{ toolResultsMap[tc.id].length > 200 ? `…（共 ${toolResultsMap[tc.id].length} 字符）` : '' }}
-              </span>
+              <span class="result-text">{{ toolResultPreviews[tc.id] }}</span>
             </div>
           </div>
         </div>

@@ -51,8 +51,93 @@ html, body, #app {
   font-family: var(--md-font-sans);
   font-feature-settings: 'cv02', 'cv03', 'cv04', 'cv11'; /* Inter 更好的字形 */
   color: var(--md-text-primary);
+  background: var(--md-bg);
 }
 
 code, pre, .mono, kbd {
   font-family: var(--md-font-mono);
 }
+
+/* ─── Dark theme ─────────────────────────────────────────────────────────
+ * 由 useThemeStore 在 <html> 上写 data-theme="dark"。
+ * 为了让页面不闪白：颜色变量通过 CSS 变量在这一层重置。
+ */
+:root[data-theme='dark'] {
+  --md-brand: #4096ff;
+  --md-brand-soft: #172a4a;
+  --md-brand-strong: #91caff;
+
+  --md-bg: #0f172a;
+  --md-bg-subtle: #131c30;
+  --md-bg-muted: #1a2338;
+  --md-border: #2a334a;
+  --md-border-soft: #1e2740;
+  --md-text-primary: #e6edf5;
+  --md-text-secondary: #94a3b8;
+  --md-text-muted: #64748b;
+
+  --md-success: #4ade80;
+  --md-success-soft: #14261a;
+  --md-warning: #fbbf24;
+  --md-warning-soft: #2b1f0d;
+  --md-danger: #f87171;
+  --md-danger-soft: #2b1414;
+  --md-info: #38bdf8;
+  --md-info-soft: #0b2333;
+
+  --md-shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.28);
+  --md-shadow-md: 0 4px 12px rgba(0, 0, 0, 0.4);
+  --md-shadow-lg: 0 12px 32px rgba(0, 0, 0, 0.55);
+}
+
+/* Dark 模式下的兜底覆盖：把大量组件里硬编码的浅色 pattern 一次性拉到深色。
+ * 只影响外层容器（背景/边框），不覆盖 Naive UI 内部组件（它们由 darkTheme 接管）。
+ */
+:root[data-theme='dark'] {
+  color-scheme: dark;
+}
+:root[data-theme='dark'] body {
+  background: var(--md-bg);
+  color: var(--md-text-primary);
+}
+
+/* 会话列表 / 文件树 / 代码浏览器 / 终端 / 输入区域的容器面板 */
+:root[data-theme='dark'] .session-list,
+:root[data-theme='dark'] .file-tree,
+:root[data-theme='dark'] .cv-panel,
+:root[data-theme='dark'] .chat-panel,
+:root[data-theme='dark'] .input-area,
+:root[data-theme='dark'] .chat-header {
+  background: var(--md-bg);
+  color: var(--md-text-primary);
+  border-color: var(--md-border);
+}
+
+/* 会话行、文件行 hover / active 用深色底 */
+:root[data-theme='dark'] .session-item:hover,
+:root[data-theme='dark'] .ft-row:hover {
+  background: var(--md-bg-muted);
+}
+:root[data-theme='dark'] .session-item.active,
+:root[data-theme='dark'] .ft-row.selected {
+  background: var(--md-brand-soft);
+  color: var(--md-brand-strong);
+}
+
+/* Assistant 气泡在 dark 下需要更深的底 */
+:root[data-theme='dark'] .message-bubble.assistant {
+  background: var(--md-bg-subtle);
+  border-color: var(--md-border);
+  color: var(--md-text-primary);
+}
+
+/* 工具卡片：dark 下淡化 subtle 底色 */
+:root[data-theme='dark'] .tool-card {
+  background: var(--md-bg-subtle);
+  border-color: var(--md-border);
+}
+:root[data-theme='dark'] .tool-header {
+  background: var(--md-bg-muted);
+  color: var(--md-text-primary);
+}
+

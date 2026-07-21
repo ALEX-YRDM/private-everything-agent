@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, watch, defineComponent, provide } from 'vue'
-import { NConfigProvider, NMessageProvider, useMessage } from 'naive-ui'
+import { NConfigProvider, NMessageProvider, useMessage, darkTheme } from 'naive-ui'
 import SessionList from './components/SessionList.vue'
 import ChatPanel from './components/ChatPanel.vue'
 import FileTreePanel from './components/FileTreePanel.vue'
@@ -11,11 +11,16 @@ import TerminalPanel from './components/TerminalPanel.vue'
 import { useChatStore } from './stores/chat'
 import { useSettingsStore } from './stores/settings'
 import { useLayoutStore } from './stores/layout'
+import { useThemeStore } from './stores/theme'
 
 const chat = useChatStore()
 const settings = useSettingsStore()
 const layout = useLayoutStore()
+const theme = useThemeStore()
 const showScheduler = ref(false)
+
+// Naive UI 主题：dark 走 darkTheme，light 走 null
+const naiveTheme = computed(() => theme.effective === 'dark' ? darkTheme : null)
 
 // 当前会话的 working_dir → 决定是否显示右侧文件树
 const workingDir = computed(() => chat.currentSession?.working_dir || null)
@@ -56,7 +61,7 @@ const TaskNotificationWatcher = defineComponent({
 </script>
 
 <template>
-  <NConfigProvider>
+  <NConfigProvider :theme="naiveTheme">
     <NMessageProvider>
       <TaskNotificationWatcher />
       <div class="app-layout">
