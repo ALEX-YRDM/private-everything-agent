@@ -106,8 +106,17 @@ class ToolRegistry:
     # ── 执行 ────────────────────────────────────────────────────────────────
 
     def _inject_ctx(self, tool: Tool, params: dict, ctx: ToolContext | None) -> dict:
-        """按工具 execute 签名决定是否注入 _ctx。不接收 _ctx 的工具原样返回 params。"""
+        """按工具 execute 签名决定是否注入 _ctx。不接收 _ctx 的工具原样返回 params。
+
+        工具可通过类属性 `_receives_ctx = False` 显式声明不接收 _ctx——这是给
+        MCP wrapper 这类"execute(**kwargs) 只是为了透传远端参数"的场景准备的
+        逃生舱，否则 **kwargs 会被误判成"能吃 _ctx"，把 _ctx 转发给远端触发
+        "Unknown argument" 错误。
+        """
         if ctx is None:
+            return params
+        # 显式 opt-out（如 MCP 工具）：不注入
+        if getattr(tool, "_receives_ctx", True) is False:
             return params
         try:
             sig = inspect.signature(tool.execute)

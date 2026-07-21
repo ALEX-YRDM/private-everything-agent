@@ -18,6 +18,10 @@ from .registry import ToolRegistry
 class MCPToolWrapper(Tool):
     """将单个 MCP 工具包装为标准 Tool 接口。"""
 
+    # 显式声明：MCP 工具的 execute 用 **kwargs 是为了透传 arguments 给远端，
+    # 不吃我们内部的 _ctx。registry 的 _inject_ctx 会尊重这个标记。
+    _receives_ctx = False
+
     def __init__(self, server_name: str, tool_def: dict, session):
         self._name = f"mcp_{server_name}_{tool_def['name']}"
         self._description = f"[{server_name}] {tool_def.get('description', '')}"

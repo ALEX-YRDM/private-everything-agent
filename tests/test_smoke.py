@@ -271,3 +271,52 @@ class TestStripThinkTags:
     def test_empty_input(self):
         from backend.agent.loop import _strip_think_tags
         assert _strip_think_tags("") == ""
+
+
+class TestCtxInjection:
+    """回归：MCP 工具 execute(**kwargs) 只是为了透传远端参数，不吃 _ctx。
+    registry 之前把所有 **kwargs 工具都塞 _ctx，导致 MCP 报 Unknown argument。"""
+
+    async def test_receives_ctx_false_skips_injection(self):
+        from backend.tools.registry import ToolRegistry
+        from backend.tools.context import ToolContext
+        from backend.tools.base import Tool
+        from pathlib import Path
+
+        class FakeMCP(Tool):
+            _receives_ctx = False
+            name = "fake_mcp_tool"
+            description = "..."
+            parameters = {"type": "object", "properties": {}}
+            async def execute(self, **kwargs):
+                return str(sorted(kwargs.keys()))
+
+        reg = ToolRegistry()
+        reg.register(FakeMCP())
+        ctx = ToolContext(cwd=Path("/tmp"), session_id="s1",
+                          sandbox_mode="free", trusted_paths=[], trusted_commands=[])
+        out = await reg.execute("fake_mcp_tool", {"url": "https://x"}, session_ctx=ctx)
+        # _ctx 不应该出现在 kwargs 里
+        assert "_ctx" not in out
+        assert "url" in out
+
+    async def test_native_kwargs_tool_still_gets_ctx(self):
+        """反向验证：没标 _receives_ctx=False 的 **kwargs 工具仍能拿到 _ctx。"""
+        from backend.tools.registry import ToolRegistry
+        from backend.tools.context import ToolContext
+        from backend.tools.base import Tool
+        from pathlib import Path
+
+        class KwargsTool(Tool):
+            name = "kwargs_tool"
+            description = "..."
+            parameters = {"type": "object", "properties": {}}
+            async def execute(self, **kwargs):
+                return "yes" if "_ctx" in kwargs else "no"
+
+        reg = ToolRegistry()
+        reg.register(KwargsTool())
+        ctx = ToolContext(cwd=Path("/tmp"), session_id="s1",
+                          sandbox_mode="free", trusted_paths=[], trusted_commands=[])
+        out = await reg.execute("kwargs_tool", {}, session_ctx=ctx)
+        assert out == "yes"
