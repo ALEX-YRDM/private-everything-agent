@@ -49,7 +49,8 @@ function onInputResize(delta: number) {
 
 // ── 图片附件 ─────────────────────────────────────────────────────────────────
 const MAX_IMAGE_SIZE = 10 * 1024 * 1024  // 10 MB
-const MAX_IMAGE_LONG_EDGE = 1024         // 长边超过则等比缩放到此值
+// 说明：不再强制 resize。用户上传什么就发送什么，避免 OCR / 图表识别场景丢失细节。
+// 若确需限制，改动这里的 MAX_IMAGE_SIZE 即可。
 const attachedImages = ref<string[]>([])
 
 // ── 文件附件 ─────────────────────────────────────────────────────────────────
@@ -82,44 +83,6 @@ function readFileAsDataURL(file: File): Promise<string> {
   })
 }
 
-function loadImage(src: string): Promise<HTMLImageElement> {
-  return new Promise((resolve, reject) => {
-    const img = new Image()
-    img.onload = () => resolve(img)
-    img.onerror = reject
-    img.src = src
-  })
-}
-
-/**
- * 长边 > MAX_IMAGE_LONG_EDGE 时按比例缩放到 MAX_IMAGE_LONG_EDGE，否则原样返回。
- * GIF 跳过缩放以保留动画；PNG 保留原格式以保留透明，其余统一输出 JPEG (q=0.92)。
- * 缩放失败时静默返回原 dataUrl。
- */
-async function resizeImageIfNeeded(file: File, dataUrl: string): Promise<string> {
-  if (file.type === 'image/gif') return dataUrl
-  try {
-    const img = await loadImage(dataUrl)
-    const longEdge = Math.max(img.naturalWidth, img.naturalHeight)
-    if (longEdge <= MAX_IMAGE_LONG_EDGE) return dataUrl
-
-    const scale = MAX_IMAGE_LONG_EDGE / longEdge
-    const w = Math.round(img.naturalWidth * scale)
-    const h = Math.round(img.naturalHeight * scale)
-    const canvas = document.createElement('canvas')
-    canvas.width = w
-    canvas.height = h
-    const ctx = canvas.getContext('2d')
-    if (!ctx) return dataUrl
-    ctx.drawImage(img, 0, 0, w, h)
-    const outputType = file.type === 'image/png' ? 'image/png' : 'image/jpeg'
-    return canvas.toDataURL(outputType, outputType === 'image/jpeg' ? 0.92 : undefined)
-  } catch (e) {
-    console.warn('图片缩放失败，使用原图:', e)
-    return dataUrl
-  }
-}
-
 async function addImageFiles(files: FileList | File[]) {
   for (const file of Array.from(files)) {
     if (!file.type.startsWith('image/')) continue
@@ -127,9 +90,9 @@ async function addImageFiles(files: FileList | File[]) {
       message.warning(`图片 ${file.name} 超过 10MB 限制`)
       continue
     }
+    // 原图直接发送，不做 resize
     const dataUrl = await readFileAsDataURL(file)
-    const finalUrl = await resizeImageIfNeeded(file, dataUrl)
-    attachedImages.value.push(finalUrl)
+    attachedImages.value.push(dataUrl)
   }
 }
 

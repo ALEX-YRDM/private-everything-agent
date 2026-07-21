@@ -106,6 +106,19 @@ class TestExport:
         body = r.text
         assert "# export-test" in body
 
+    async def test_export_markdown_chinese_title(self, client):
+        """回归：中文标题走 RFC 5987 编码，不再触发 latin-1 UnicodeEncodeError。"""
+        r = await client.post("/api/sessions", json={"title": "梦蝶的会话"})
+        sid = r.json()["id"]
+
+        r = await client.get(f"/api/sessions/{sid}/export", params={"format": "md"})
+        assert r.status_code == 200
+        cd = r.headers["content-disposition"]
+        # 中文文件名必须以 percent-encoded 形式出现
+        assert "filename*=UTF-8''" in cd
+        # 原文中文不能出现在 header 里（否则又要爆）
+        assert "梦蝶" not in cd
+
     async def test_export_json(self, client):
         r = await client.post("/api/sessions", json={"title": "j-test"})
         sid = r.json()["id"]
@@ -130,6 +143,7 @@ class TestToolRegistry:
             "spawn_subagents",
             "create_task", "list_tasks", "update_task", "delete_task",
             "todo_write", "todo_read",
+            "enter_plan_mode", "exit_plan_mode",
         }
         missing = expected - set(tools)
         assert not missing, f"缺失工具: {missing}"

@@ -376,6 +376,11 @@ async def lifespan(app: FastAPI):
     agent.tools.register(TodoWriteTool(db))
     agent.tools.register(TodoReadTool(db))
 
+    # Plan Mode 切换工具：让 Agent 在需要"先出方案再动手"时主动进入 / 退出
+    from .tools.plan_mode import EnterPlanModeTool, ExitPlanModeTool
+    agent.tools.register(EnterPlanModeTool(db))
+    agent.tools.register(ExitPlanModeTool(db))
+
     # 注册 SubAgent 工具（需在 agent 完全就绪后注册，以便持有引用）
     from .tools.subagent import SpawnSubAgentsTool
     agent.tools.register(SpawnSubAgentsTool(

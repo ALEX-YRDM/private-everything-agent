@@ -34,6 +34,7 @@ export type StreamEvent =
   | { type: 'tool_confirm'; id: string; name: string; args: Record<string, unknown>; cwd: string; why: string; preview?: ConfirmPreview; suggested_trust_path?: string; suggested_trust_command?: string }
   | { type: 'tool_denied'; id: string; name: string; reason: string }
   | { type: 'todos_update'; session_id?: string; todos: TodoItem[] }
+  | { type: 'plan_mode_update'; session_id?: string; plan_mode: boolean; reason?: string | null }
 
 export type ConfirmDecision = 'allow' | 'deny' | 'trust_path' | 'trust_command'
 

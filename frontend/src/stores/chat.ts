@@ -175,17 +175,21 @@ export const useChatStore = defineStore('chat', () => {
    *
    * displayMessageId 是前端消息 id（如 "msg-42"），提取尾部数字作为后端 id。
    * 对本地临时消息（如 "user-1234567" / "streaming-*"）不生效。
+   *
+   * @param images 可选：编辑重发时保留的图片 dataURL 列表（默认沿用原消息 images）
+   * @returns 删除的消息条数（含被编辑的这条），供调用方展示警告
    */
   async function editAndResendFrom(
     displayMessageId: string,
     newContent: string,
-  ): Promise<void> {
+    images?: string[],
+  ): Promise<{ deletedCount: number }> {
     const sid = currentSessionId.value
-    if (!sid) return
+    if (!sid) return { deletedCount: 0 }
     const match = displayMessageId.match(/^msg-(\d+)$/)
     if (!match) {
       console.warn('该消息未持久化，无法编辑重发', displayMessageId)
-      return
+      return { deletedCount: 0 }
     }
     const backendId = Number(match[1])
     // 1. 后端删除该条及之后所有消息
@@ -194,14 +198,32 @@ export const useChatStore = defineStore('chat', () => {
       { method: 'DELETE' },
     )
     if (!r.ok) throw new Error(await r.text())
+    let deletedCount = 0
+    try {
+      const data = await r.json()
+      deletedCount = Number(data.deleted_count ?? 0)
+    } catch { /* ignore */ }
 
     // 2. 本地 state 同步截断
     const state = getSessionState(sid)
     const idx = state.messages.findIndex(m => m.id === displayMessageId)
     if (idx >= 0) state.messages = state.messages.slice(0, idx)
 
-    // 3. 用新内容重发（复用现有 sendMessage）
-    await sendMessage(newContent)
+    // 3. 用新内容重发；如果没显式传 images，尝试沿用被编辑消息里的图片
+    await sendMessage(newContent, images)
+    return { deletedCount }
+  }
+
+  /**
+   * 预估如果从某条消息重发，会删掉多少条（含自己）。用于编辑前的确认弹窗。
+   */
+  function countMessagesFrom(displayMessageId: string): number {
+    const sid = currentSessionId.value
+    if (!sid) return 0
+    const state = getSessionState(sid)
+    const idx = state.messages.findIndex(m => m.id === displayMessageId)
+    if (idx < 0) return 0
+    return state.messages.length - idx
   }
 
   /**
@@ -735,6 +757,10 @@ export const useChatStore = defineStore('chat', () => {
       const targetId = event.session_id || sessionId
       const st = getSessionState(targetId)
       st.todos = event.todos ?? []
+    } else if (event.type === 'plan_mode_update') {
+      // Agent 通过 enter/exit_plan_mode 工具切换 Plan Mode → 前端 chip 立即刷新
+      const targetId = event.session_id || sessionId
+      planModeMap.value[targetId] = !!event.plan_mode
     }
   }
 
@@ -856,6 +882,7 @@ export const useChatStore = defineStore('chat', () => {
     refreshTodos,
     saveTodos,
     editAndResendFrom,
+    countMessagesFrom,
     planMode,
     refreshPlanMode,
     setPlanMode,

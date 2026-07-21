@@ -609,13 +609,20 @@ async def export_session(session_id: str, format: str = "md",
 
     body = _export_session_to_markdown(dict(session), [dict(m) for m in messages])
 
-    # 文件名：会话标题 → 安全化
+    # 文件名：会话标题 → 安全化 → RFC 5987 percent-encoding
+    # HTTP header 只能传 latin-1，中文必须 URL 编码后走 filename*=UTF-8'' 语法
+    from urllib.parse import quote as _urlquote
     safe_title = _re.sub(r"[^\w一-龥\-_. ]+", "_", session.get("title") or session_id).strip("_ ") or session_id
     filename = f"{safe_title}.md"
+    encoded = _urlquote(filename, safe="")
+    # fallback ASCII 文件名（给不认 filename* 的老浏览器；此处 session_id 一定是 ASCII）
+    fallback = f"{session_id}.md"
     return PlainTextResponse(
         body,
         media_type="text/markdown; charset=utf-8",
-        headers={"Content-Disposition": f'attachment; filename*=UTF-8\'\'{filename}'},
+        headers={
+            "Content-Disposition": f"attachment; filename=\"{fallback}\"; filename*=UTF-8''{encoded}",
+        },
     )
 
 

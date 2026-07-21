@@ -16,21 +16,43 @@ const msg = useMessage()
 // 编辑态：只对已持久化的历史 user 消息（id = "msg-<int>"）开放
 const editing = ref(false)
 const editText = ref('')
+const editImages = ref<string[]>([])
 const canEdit = computed(() =>
   props.message.role === 'user' && /^msg-\d+$/.test(props.message.id) && !chat.isStreaming,
 )
 
+const editDeletionCount = computed(() =>
+  editing.value ? chat.countMessagesFrom(props.message.id) : 0,
+)
+
 function startEdit() {
   editText.value = props.message.content || ''
+  // 保留原消息里的图片；用户可以在编辑态点 ✕ 移除
+  editImages.value = [...(props.message.images || [])]
   editing.value = true
 }
 function cancelEdit() { editing.value = false }
+function removeEditImage(i: number) {
+  editImages.value = editImages.value.filter((_, idx) => idx !== i)
+}
 async function commitEdit() {
   const text = editText.value.trim()
-  if (!text) { cancelEdit(); return }
+  if (!text && editImages.value.length === 0) { cancelEdit(); return }
+  // 明显的破坏性动作 → 弹窗确认（一条也要问，因为消息编辑本质是"截断历史"）
+  const deletionCount = chat.countMessagesFrom(props.message.id)
+  const suffix = props.message.files?.length
+    ? '\n\n⚠ 原消息中的文件附件（.docx/.xlsx 等）在编辑重发时无法保留，会被移除。'
+    : ''
+  const ok = window.confirm(
+    `将删除该消息及其之后共 ${deletionCount} 条消息，并用新内容重新发起。是否继续？${suffix}`,
+  )
+  if (!ok) return
   editing.value = false
   try {
-    await chat.editAndResendFrom(props.message.id, text)
+    await chat.editAndResendFrom(
+      props.message.id, text,
+      editImages.value.length ? [...editImages.value] : undefined,
+    )
   } catch (e: any) {
     msg.error(`重发失败：${e?.message || e}`)
   }
@@ -47,7 +69,41 @@ const formattedTime = computed(() => {
   })
 })
 
-const renderedContent = computed(() => renderMarkdown(props.message.content))
+/**
+ * 有些模型（GLM-4/5、DeepSeek-R1 早期版本、Qwen QwQ 等）会把思考过程用
+ * <think>...</think> 直接塞在 content 里而不是走 reasoning_content 字段。
+ * 这里在渲染前把它抽出来，thinking 走 ThinkingBlock，剩余内容才走 markdown。
+ *
+ * 流式期间可能只有开头 <think> 还没闭合 → 也当作 thinking 处理，实际 content 为空。
+ */
+const THINK_RE = /<think>([\s\S]*?)(?:<\/think>|$)/gi
+
+function splitThink(raw: string): { thinking: string; body: string } {
+  if (!raw || !raw.includes('<think>')) return { thinking: '', body: raw || '' }
+  const chunks: string[] = []
+  let body = raw.replace(THINK_RE, (_, inner) => {
+    chunks.push(inner.trim())
+    return ''
+  })
+  // 兜底：极少数模型只发 </think> 没配对开头
+  body = body.replace(/<\/think>/gi, '')
+  return { thinking: chunks.join('\n\n').trim(), body: body.trim() }
+}
+
+const inlineSplit = computed(() => {
+  if (props.message.role !== 'assistant') return { thinking: '', body: props.message.content || '' }
+  return splitThink(props.message.content || '')
+})
+
+/** 合并显式 reasoning 字段 + content 里的 <think>；两者都可能存在 */
+const combinedReasoning = computed(() => {
+  const explicit = (props.message.reasoning || '').trim()
+  const inline = inlineSplit.value.thinking
+  if (explicit && inline) return `${explicit}\n\n${inline}`
+  return explicit || inline
+})
+
+const renderedContent = computed(() => renderMarkdown(inlineSplit.value.body))
 
 const ERROR_META: Record<string, { icon: string; title: string }> = {
   LLM_AUTH:              { icon: '🔑', title: 'API Key 无效' },
@@ -150,6 +206,13 @@ async function handleMarkdownClick(e: MouseEvent) {
           <code v-for="p in message.attachedPaths" :key="p" class="uap-path" :title="p">{{ p }}</code>
         </div>
         <template v-if="editing">
+          <!-- 编辑态：保留的图片（可单张移除） -->
+          <div v-if="editImages.length" class="edit-images">
+            <div v-for="(img, idx) in editImages" :key="idx" class="edit-image-item">
+              <img :src="img" class="edit-image-thumb" />
+              <button class="edit-image-remove" @click="removeEditImage(idx)" title="移除该图">✕</button>
+            </div>
+          </div>
           <NInput
             v-model:value="editText"
             type="textarea"
@@ -159,6 +222,9 @@ async function handleMarkdownClick(e: MouseEvent) {
             @keydown.esc="cancelEdit"
             autofocus
           />
+          <div class="edit-warning">
+            ⚠ 提交后将删除该消息及之后共 <b>{{ editDeletionCount }}</b> 条消息并重新发起。文件附件无法保留。
+          </div>
           <div class="edit-actions">
             <NButton size="tiny" @click="cancelEdit">取消</NButton>
             <NButton size="tiny" type="primary" @click="commitEdit">
@@ -172,7 +238,7 @@ async function handleMarkdownClick(e: MouseEvent) {
       </template>
 
       <template v-else-if="message.role === 'assistant'">
-        <ThinkingBlock v-if="message.reasoning" :content="message.reasoning" />
+        <ThinkingBlock v-if="combinedReasoning" :content="combinedReasoning" />
         <ToolCallCard
           v-for="tc in message.toolCalls"
           :key="tc.id"
@@ -180,7 +246,7 @@ async function handleMarkdownClick(e: MouseEvent) {
           :result="message.toolResults?.[tc.id]"
         />
         <div
-          v-if="message.content"
+          v-if="inlineSplit.body"
           class="markdown-content"
           v-html="renderedContent"
           @click="handleMarkdownClick"
@@ -364,6 +430,48 @@ async function handleMarkdownClick(e: MouseEvent) {
   justify-content: flex-end;
   margin-top: 6px;
 }
+.edit-warning {
+  margin-top: 6px;
+  padding: 4px 8px;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.12);
+  color: rgba(255, 255, 255, 0.9);
+  font-size: 11.5px;
+  line-height: 1.5;
+}
+.edit-warning b { color: #fff; }
+.edit-images {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 6px;
+}
+.edit-image-item {
+  position: relative;
+}
+.edit-image-thumb {
+  width: 72px;
+  height: 72px;
+  object-fit: cover;
+  border-radius: 6px;
+  border: 1px solid rgba(255, 255, 255, 0.35);
+}
+.edit-image-remove {
+  position: absolute;
+  top: -6px;
+  right: -6px;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  border: none;
+  background: var(--md-danger);
+  color: white;
+  font-size: 10px;
+  line-height: 20px;
+  padding: 0;
+  cursor: pointer;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.25);
+}
 
 .edit-btn {
   opacity: 0.4;
@@ -531,33 +639,117 @@ async function handleMarkdownClick(e: MouseEvent) {
 <style>
 .markdown-content {
   font-size: 14px;
-  line-height: 1.7;
+  line-height: 1.75;
+  color: var(--md-text-primary);
 }
+
+.markdown-content > *:first-child { margin-top: 0 !important; }
+.markdown-content > *:last-child { margin-bottom: 0 !important; }
 
 .markdown-content p {
-  margin: 0 0 8px;
+  margin: 0 0 12px;
 }
 
-.markdown-content p:last-child {
-  margin-bottom: 0;
+.markdown-content h1,
+.markdown-content h2,
+.markdown-content h3,
+.markdown-content h4 {
+  margin: 20px 0 10px;
+  font-weight: 600;
+  line-height: 1.35;
+  color: var(--md-text-primary);
+}
+.markdown-content h1 { font-size: 20px; }
+.markdown-content h2 { font-size: 17px; padding-bottom: 4px; border-bottom: 1px solid var(--md-border-soft); }
+.markdown-content h3 { font-size: 15px; }
+.markdown-content h4 { font-size: 14px; }
+
+.markdown-content ul,
+.markdown-content ol {
+  padding-left: 22px;
+  margin: 8px 0 14px;
+}
+.markdown-content li {
+  margin: 4px 0;
+}
+.markdown-content li > p {
+  /* 列表项里的段落不再额外压间距 */
+  margin: 0 0 6px;
+}
+.markdown-content li > ul,
+.markdown-content li > ol {
+  margin: 6px 0;
 }
 
-.markdown-content h1, .markdown-content h2, .markdown-content h3 {
-  margin: 12px 0 8px;
+.markdown-content hr {
+  border: none;
+  border-top: 1px solid var(--md-border);
+  margin: 18px 0;
+}
+
+.markdown-content strong {
+  font-weight: 600;
+  color: var(--md-text-primary);
+}
+.markdown-content em {
+  font-style: italic;
+  color: var(--md-text-secondary);
+}
+
+.markdown-content blockquote {
+  margin: 10px 0;
+  padding: 6px 12px;
+  border-left: 3px solid var(--md-brand);
+  background: var(--md-bg-subtle);
+  color: var(--md-text-secondary);
+  border-radius: 0 6px 6px 0;
+}
+
+.markdown-content a {
+  color: var(--md-brand);
+  text-decoration: none;
+  border-bottom: 1px solid transparent;
+  transition: border-color 0.15s;
+}
+.markdown-content a:hover {
+  border-bottom-color: var(--md-brand);
+}
+
+.markdown-content .md-image {
+  max-width: 100%;
+  height: auto;
+  border-radius: 6px;
+  margin: 10px 0;
+  border: 1px solid var(--md-border-soft);
+}
+
+.markdown-content table {
+  border-collapse: collapse;
+  margin: 10px 0;
+  font-size: 13px;
+}
+.markdown-content th,
+.markdown-content td {
+  padding: 6px 12px;
+  border: 1px solid var(--md-border);
+  text-align: left;
+}
+.markdown-content th {
+  background: var(--md-bg-subtle);
   font-weight: 600;
 }
-
-.markdown-content ul, .markdown-content ol {
-  padding-left: 20px;
-  margin: 8px 0;
+.markdown-content tr:nth-child(even) td {
+  background: var(--md-bg-subtle);
 }
 
 .markdown-content code {
-  background: #e8e8e8;
-  padding: 1px 5px;
+  background: var(--md-bg-muted);
+  color: var(--md-danger);
+  padding: 1.5px 6px;
   border-radius: 4px;
-  font-family: 'SF Mono', 'Monaco', 'Cascadia Code', monospace;
-  font-size: 12px;
+  font-family: var(--md-font-mono);
+  font-size: 12.5px;
+  border: 1px solid var(--md-border-soft);
 }
 
 .markdown-content .code-block-wrapper {
@@ -612,34 +804,7 @@ async function handleMarkdownClick(e: MouseEvent) {
   color: #d4d4d4;
   font-size: 13px;
   line-height: 1.5;
-}
-
-.markdown-content blockquote {
-  border-left: 3px solid #1677ff;
-  padding-left: 12px;
-  margin: 8px 0;
-  color: #666;
-}
-
-.markdown-content a {
-  color: #1677ff;
-  text-decoration: none;
-}
-
-.markdown-content a:hover {
-  text-decoration: underline;
-}
-
-.markdown-content table {
-  border-collapse: collapse;
-  width: 100%;
-  margin: 8px 0;
-  font-size: 13px;
-}
-
-.markdown-content th, .markdown-content td {
-  border: 1px solid #e0e0e0;
-  padding: 6px 10px;
+  border: none;
 }
 
 .markdown-content th {

@@ -245,6 +245,7 @@ class AgentLoop:
             sub_working_dir = ctx.cwd if ctx else None
             # SubAgent 从父 loop 继承 plan_mode（父在 plan mode 时子任务也应受限）
             plan_mode = bool(getattr(self, "_inherited_plan_mode", False))
+            self._current_plan_mode = plan_mode
             # SubAgent 场景下没有 session_meta，project_probe 若在父会话里可以额外传，
             # 但当前只需 cwd 简报即可
             messages = await self.context.build_subagent_messages(
@@ -390,9 +391,16 @@ class AgentLoop:
                         tool_obj = self.tools.get_tool(tc["name"])
 
                         # ── Plan Mode 拦截 ───────────────────────────────
-                        # 处于 Plan Mode 时，所有破坏性工具直接拒绝执行，
-                        # 让 Agent 把方案写在回复里，用户确认后关闭 Plan Mode 再执行
-                        if plan_mode and tc["name"] in self.confirm_required_tools:
+                        # 处于 Plan Mode 时，所有破坏性工具直接拒绝执行。
+                        # 每个 tool_call 之前重读 metadata（DB 读极轻），确保同一轮内
+                        # Agent 通过 enter/exit_plan_mode 切换状态后能立即生效。
+                        if not is_subagent and session_id:
+                            try:
+                                cur_meta = await self.memory.db.get_session_metadata(session_id)
+                                self._current_plan_mode = bool(cur_meta.get("plan_mode"))
+                            except Exception:
+                                pass
+                        if self._current_plan_mode and tc["name"] in self.confirm_required_tools:
                             reason = "当前处于 Plan Mode：请把方案与预期改动写在回复中；用户批准后关闭 Plan Mode 再实际执行。"
                             yield {
                                 "type": "tool_denied", "id": tc["id"],
