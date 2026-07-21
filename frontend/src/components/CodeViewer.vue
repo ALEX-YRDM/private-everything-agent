@@ -14,6 +14,20 @@ import { useCodeViewerStore } from '../stores/codeViewer'
 
 const viewer = useCodeViewerStore()
 
+/** 图片显示模式：fit=按容器自适应；actual=原始尺寸（配合滚动查看细节） */
+const imageMode = ref<'fit' | 'actual'>('fit')
+const imgError = ref<string | null>(null)
+
+function toggleImageMode() {
+  imageMode.value = imageMode.value === 'fit' ? 'actual' : 'fit'
+}
+function onImgError() {
+  imgError.value = '图片加载失败'
+}
+function onImgLoad() {
+  imgError.value = null
+}
+
 const width = ref<number>(
   Math.min(720, Math.max(360, Math.round(window.innerWidth * 0.42))),
 )
@@ -85,12 +99,31 @@ const active = computed(() => viewer.activeTab)
           <code class="cv-path">{{ active.path }}</code>
           <span class="cv-size">{{ formatSize(active.size) }}</span>
           <span v-if="active.truncated" class="cv-trunc">已截断</span>
+          <NButton
+            v-if="active.kind === 'image' && !active.loading && !active.error"
+            size="tiny" quaternary @click="toggleImageMode"
+          >
+            {{ imageMode === 'fit' ? '🔍 原始尺寸' : '⤢ 自适应' }}
+          </NButton>
         </div>
         <div v-if="active.loading" class="cv-loading">
           <NSpin size="small" /> 加载中…
         </div>
         <div v-else-if="active.error" class="cv-error">
           ⚠️ {{ active.error }}
+        </div>
+        <div v-else-if="active.kind === 'image'" class="cv-image-wrap" :class="`mode-${imageMode}`">
+          <div v-if="imgError" class="cv-error">⚠️ {{ imgError }}</div>
+          <img
+            v-else
+            :key="active.path"
+            :src="active.rawUrl"
+            :alt="active.path"
+            class="cv-image"
+            :class="`mode-${imageMode}`"
+            @error="onImgError"
+            @load="onImgLoad"
+          />
         </div>
         <CodeBlock
           v-else
@@ -250,4 +283,40 @@ const active = computed(() => viewer.activeTab)
   gap: 8px;
 }
 .cv-error { color: #b91c1c; }
+
+/* 图片预览 */
+.cv-image-wrap {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 300px;
+  /* 棋盘格背景显示透明像素 */
+  background-image:
+    linear-gradient(45deg, #f3f4f6 25%, transparent 25%),
+    linear-gradient(-45deg, #f3f4f6 25%, transparent 25%),
+    linear-gradient(45deg, transparent 75%, #f3f4f6 75%),
+    linear-gradient(-45deg, transparent 75%, #f3f4f6 75%);
+  background-size: 20px 20px;
+  background-position: 0 0, 0 10px, 10px -10px, -10px 0;
+  padding: 8px;
+}
+.cv-image-wrap.mode-actual {
+  align-items: flex-start;
+  justify-content: flex-start;
+  overflow: auto;
+}
+.cv-image {
+  display: block;
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.08);
+  background: white;
+}
+.cv-image.mode-fit {
+  max-width: 100%;
+  max-height: calc(100vh - 220px);
+  object-fit: contain;
+}
+.cv-image.mode-actual {
+  max-width: none;
+  max-height: none;
+}
 </style>

@@ -326,6 +326,88 @@ async def get_file_content(session_id: str, path: str, max_bytes: int = 524288,
     }
 
 
+# 图片预览支持的扩展名（下发给 CodeViewer.vue，用于判断该走 raw 端点）
+_IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg", ".bmp", ".ico", ".avif"}
+_IMAGE_MAX_BYTES = 10 * 1024 * 1024  # 10 MB 兜底
+
+
+@router.get("/{session_id}/file-raw")
+async def get_file_raw(session_id: str, path: str,
+                       sessions=Depends(get_sessions), config=Depends(get_config)):
+    """返回原始二进制（供代码浏览器预览图片等媒体文件）。
+
+    与 file-content 的区别：不做二进制探测，不做 UTF-8 解码；直接把字节
+    流原样返回，媒体类型交给 mimetypes 猜（浏览器自行渲染）。同样应用
+    working_dir 沙箱校验；文件大小超过 10MB 直接拒绝。
+    """
+    from fastapi.responses import Response
+    import mimetypes
+
+    session = await sessions.get_session(session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="会话不存在")
+    if not path:
+        raise HTTPException(status_code=400, detail="path 不能为空")
+
+    target = _resolve_under_root(session, config, path)
+    if not target.exists():
+        raise HTTPException(status_code=404, detail=f"文件不存在: {path}")
+    if not target.is_file():
+        raise HTTPException(status_code=400, detail="路径不是文件")
+
+    size = target.stat().st_size
+    if size > _IMAGE_MAX_BYTES:
+        raise HTTPException(
+            status_code=413,
+            detail=f"文件过大（{size} B > {_IMAGE_MAX_BYTES} B），不支持预览",
+        )
+
+    try:
+        raw = target.read_bytes()
+    except PermissionError:
+        raise HTTPException(status_code=403, detail="无权读取")
+
+    mime, _ = mimetypes.guess_type(str(target))
+    if not mime:
+        # 兜底：svg 扩展名 guess 结果可能受系统 mime.types 影响
+        ext = target.suffix.lower()
+        mime = {
+            ".svg": "image/svg+xml",
+            ".webp": "image/webp",
+            ".avif": "image/avif",
+            ".ico": "image/x-icon",
+        }.get(ext, "application/octet-stream")
+    return Response(content=raw, media_type=mime)
+
+
+@router.get("/{session_id}/file-meta")
+async def get_file_meta(session_id: str, path: str,
+                        sessions=Depends(get_sessions), config=Depends(get_config)):
+    """轻量元信息端点：只返回 size + mime，用于图片预览时展示尺寸/大小。"""
+    import mimetypes
+
+    session = await sessions.get_session(session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="会话不存在")
+    if not path:
+        raise HTTPException(status_code=400, detail="path 不能为空")
+
+    target = _resolve_under_root(session, config, path)
+    if not target.exists():
+        raise HTTPException(status_code=404, detail=f"文件不存在: {path}")
+    if not target.is_file():
+        raise HTTPException(status_code=400, detail="路径不是文件")
+
+    mime, _ = mimetypes.guess_type(str(target))
+    return {
+        "session_id": session_id,
+        "path": path,
+        "size": target.stat().st_size,
+        "mime": mime or "application/octet-stream",
+        "is_image": target.suffix.lower() in _IMAGE_EXTS,
+    }
+
+
 # ── files/search (@ 补全数据源) ────────────────────────────────────────────
 
 _FILE_SEARCH_MAX_SCAN = 20000

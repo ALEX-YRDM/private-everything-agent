@@ -1,5 +1,7 @@
 const API_BASE = import.meta.env.VITE_API_BASE || 'http://localhost:8000'
 
+export const apiBase = API_BASE
+
 async function request<T>(path: string, options?: RequestInit): Promise<T> {
   const resp = await fetch(`${API_BASE}${path}`, {
     headers: { 'Content-Type': 'application/json' },
@@ -194,6 +196,13 @@ export const api = {
       request<{ session_id: string; path: string; size: number; truncated: boolean; content: string }>(
         `/api/sessions/${id}/file-content?path=${encodeURIComponent(path)}`
       ),
+    getFileMeta: (id: string, path: string) =>
+      request<{ session_id: string; path: string; size: number; mime: string; is_image: boolean }>(
+        `/api/sessions/${id}/file-meta?path=${encodeURIComponent(path)}`
+      ),
+    /** 图片等媒体文件的原始 URL；直接给 <img src> 用 */
+    fileRawUrl: (id: string, path: string) =>
+      `${API_BASE}/api/sessions/${id}/file-raw?path=${encodeURIComponent(path)}`,
     // ── 信任列表 ───────────────────────────────────────
     getTrusts: (id: string) =>
       request<Trusts>(`/api/sessions/${id}/trusts`),
