@@ -472,3 +472,136 @@ async def git_status(session_id: str, sessions=Depends(get_sessions), config=Dep
     }
     _GIT_STATUS_CACHE[cache_key] = (now, result)
     return result
+
+
+# ── 会话导出为 Markdown ────────────────────────────────────────────────────
+
+def _export_session_to_markdown(session: dict, messages: list[dict]) -> str:
+    """把会话消息渲染成一份可读性优先的 Markdown 文档。"""
+    import json as _json
+    lines: list[str] = []
+    title = session.get("title") or session.get("id")
+    lines.append(f"# {title}")
+    lines.append("")
+    meta_bits = []
+    if session.get("created_at"):
+        meta_bits.append(f"创建于 {session['created_at']}")
+    if session.get("model"):
+        meta_bits.append(f"模型：{session['model']}")
+    if session.get("working_dir"):
+        meta_bits.append(f"工作目录：`{session['working_dir']}`")
+    if meta_bits:
+        lines.append("> " + " · ".join(meta_bits))
+        lines.append("")
+
+    for msg in messages:
+        role = msg.get("role")
+        content = (msg.get("content") or "").strip()
+        if role == "user":
+            lines.append("## 👤 用户")
+            lines.append("")
+            if content:
+                lines.append(content)
+                lines.append("")
+        elif role == "assistant":
+            lines.append("## 🤖 助手")
+            lines.append("")
+            reasoning = msg.get("reasoning")
+            if reasoning:
+                lines.append("<details><summary>思维链</summary>")
+                lines.append("")
+                lines.append(reasoning.strip())
+                lines.append("")
+                lines.append("</details>")
+                lines.append("")
+            if content:
+                lines.append(content)
+                lines.append("")
+            tc_raw = msg.get("tool_calls")
+            if tc_raw:
+                try:
+                    tool_calls = _json.loads(tc_raw) if isinstance(tc_raw, str) else tc_raw
+                except Exception:
+                    tool_calls = []
+                for tc in (tool_calls or []):
+                    name = tc.get("name", "?")
+                    args = tc.get("arguments") or tc.get("args") or {}
+                    if isinstance(args, str):
+                        args_preview = args
+                    else:
+                        try:
+                            args_preview = _json.dumps(args, ensure_ascii=False, indent=2)
+                        except Exception:
+                            args_preview = str(args)
+                    lines.append(f"<details><summary>🔧 工具调用：<code>{name}</code></summary>")
+                    lines.append("")
+                    lines.append("```json")
+                    lines.append(args_preview)
+                    lines.append("```")
+                    lines.append("")
+                    lines.append("</details>")
+                    lines.append("")
+            usage_bits = []
+            if msg.get("input_tokens") is not None:
+                usage_bits.append(f"input {msg['input_tokens']}")
+            if msg.get("output_tokens") is not None:
+                usage_bits.append(f"output {msg['output_tokens']}")
+            if usage_bits:
+                lines.append(f"<sub>tokens · {' · '.join(usage_bits)}</sub>")
+                lines.append("")
+        elif role == "tool":
+            tool_name = msg.get("tool_name") or "工具"
+            lines.append(f"<details><summary>↳ 工具结果：<code>{tool_name}</code></summary>")
+            lines.append("")
+            lines.append("```")
+            lines.append(content or "(空)")
+            lines.append("```")
+            lines.append("")
+            lines.append("</details>")
+            lines.append("")
+        else:
+            # system / 其它角色一般不展示；如遇到留个可折叠标记
+            lines.append(f"<details><summary>{role or 'system'}</summary>")
+            lines.append("")
+            lines.append(content)
+            lines.append("")
+            lines.append("</details>")
+            lines.append("")
+    return "\n".join(lines).rstrip() + "\n"
+
+
+@router.get("/{session_id}/export")
+async def export_session(session_id: str, format: str = "md",
+                         sessions=Depends(get_sessions)):
+    """
+    导出会话为 Markdown / JSON。
+    - format=md（默认）：可读性优先的 Markdown，工具调用折叠
+    - format=json：原始 messages（不含 system prompt）
+    """
+    from fastapi.responses import PlainTextResponse, JSONResponse
+    import re as _re
+
+    session = await sessions.get_session(session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="会话不存在")
+
+    messages = await sessions.get_messages_for_display(session_id)
+
+    if format == "json":
+        return JSONResponse({
+            "session": dict(session),
+            "messages": [dict(m) for m in messages],
+        })
+    if format != "md":
+        raise HTTPException(status_code=400, detail="format 只支持 md / json")
+
+    body = _export_session_to_markdown(dict(session), [dict(m) for m in messages])
+
+    # 文件名：会话标题 → 安全化
+    safe_title = _re.sub(r"[^\w一-龥\-_. ]+", "_", session.get("title") or session_id).strip("_ ") or session_id
+    filename = f"{safe_title}.md"
+    return PlainTextResponse(
+        body,
+        media_type="text/markdown; charset=utf-8",
+        headers={"Content-Disposition": f'attachment; filename*=UTF-8\'\'{filename}'},
+    )

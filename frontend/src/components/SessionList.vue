@@ -94,6 +94,17 @@ async function toggleSubSessions(sessionId: string) {
     await chat.loadSubagentSessions(sessionId)
   }
 }
+
+async function exportSession(sessionId: string) {
+  const url = `/api/sessions/${sessionId}/export?format=md`
+  // 用普通 <a download> 触发浏览器下载；后端在 Content-Disposition 里指定文件名
+  const a = document.createElement('a')
+  a.href = url
+  a.rel = 'noopener'
+  document.body.appendChild(a)
+  a.click()
+  a.remove()
+}
 </script>
 
 <template>
@@ -179,6 +190,12 @@ async function toggleSubSessions(sessionId: string) {
                     <button class="action-btn" @click="startRename(session.id, session.title)">✏️</button>
                   </template>
                   重命名
+                </NTooltip>
+                <NTooltip>
+                  <template #trigger>
+                    <button class="action-btn" @click="exportSession(session.id)">⬇</button>
+                  </template>
+                  导出为 Markdown
                 </NTooltip>
                 <NPopconfirm @positive-click="chat.deleteSession(session.id)">
                   <template #trigger>

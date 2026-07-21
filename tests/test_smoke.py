@@ -94,6 +94,29 @@ class TestFileEndpoints:
         assert "hello.txt" in paths
 
 
+class TestExport:
+    async def test_export_markdown(self, client):
+        r = await client.post("/api/sessions", json={"title": "export-test"})
+        sid = r.json()["id"]
+
+        r = await client.get(f"/api/sessions/{sid}/export", params={"format": "md"})
+        assert r.status_code == 200
+        assert "text/markdown" in r.headers["content-type"]
+        assert "attachment" in r.headers["content-disposition"]
+        body = r.text
+        assert "# export-test" in body
+
+    async def test_export_json(self, client):
+        r = await client.post("/api/sessions", json={"title": "j-test"})
+        sid = r.json()["id"]
+
+        r = await client.get(f"/api/sessions/{sid}/export", params={"format": "json"})
+        assert r.status_code == 200
+        data = r.json()
+        assert data["session"]["title"] == "j-test"
+        assert isinstance(data["messages"], list)
+
+
 class TestToolRegistry:
     async def test_expected_tools_registered(self, app_instance):
         """核心工具全部注册（避免误删）。"""
