@@ -536,15 +536,25 @@ def _export_session_to_markdown(session: dict, messages: list[dict]) -> str:
                 except Exception:
                     tool_calls = []
                 for tc in (tool_calls or []):
-                    name = tc.get("name", "?")
-                    args = tc.get("arguments") or tc.get("args") or {}
-                    if isinstance(args, str):
-                        args_preview = args
+                    # tool_calls JSON 是 OpenAI 标准形状：{id, type, function:{name, arguments}}
+                    # 兼容旧数据可能扁平存 {name, arguments}
+                    fn = tc.get("function") or {}
+                    name = fn.get("name") or tc.get("name") or "?"
+                    raw_args = fn.get("arguments") if "arguments" in fn else (
+                        tc.get("arguments") or tc.get("args") or {}
+                    )
+                    # arguments 通常是 JSON 字符串（LLM 流式产出），尝试解析成对象再格式化
+                    if isinstance(raw_args, str):
+                        try:
+                            parsed = _json.loads(raw_args) if raw_args.strip() else {}
+                            args_preview = _json.dumps(parsed, ensure_ascii=False, indent=2)
+                        except Exception:
+                            args_preview = raw_args
                     else:
                         try:
-                            args_preview = _json.dumps(args, ensure_ascii=False, indent=2)
+                            args_preview = _json.dumps(raw_args, ensure_ascii=False, indent=2)
                         except Exception:
-                            args_preview = str(args)
+                            args_preview = str(raw_args)
                     lines.append(f"<details><summary>🔧 工具调用：<code>{name}</code></summary>")
                     lines.append("")
                     lines.append("```json")
