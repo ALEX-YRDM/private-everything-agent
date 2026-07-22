@@ -166,7 +166,7 @@ class MainScreen(Screen):
     @property
     def _input(self) -> InputArea:               return self.query_one(InputArea)
     @property
-    def _attach(self) -> AttachmentStrip:        return self.query_one(AttachmentStrip)
+    def _attach_strip(self) -> AttachmentStrip:  return self.query_one(AttachmentStrip)
     @property
     def _files(self) -> FilesPane:               return self.query_one(FilesPane)
     @property
@@ -379,7 +379,7 @@ class MainScreen(Screen):
                 self._input.text = rest
             return
         if content == "/attach-clear":
-            self._attach.clear_items()
+            self._attach_strip.clear_items()
             await self._chat.add_system_message("[已清空附件]")
             return
         if content.startswith("/attach"):
@@ -418,7 +418,7 @@ class MainScreen(Screen):
             return
 
         # 普通消息 —— 带上附件（如果有）
-        atts = self._attach.items
+        atts = self._attach_strip.items
         images = [a.data_uri for a in atts if a.image and a.data_uri]
         files_payload: list[dict] = []
         for a in atts:
@@ -448,7 +448,7 @@ class MainScreen(Screen):
             self._status.streaming = False
         finally:
             # 发送后清空附件区
-            self._attach.clear_items()
+            self._attach_strip.clear_items()
 
     def _append_clipboard_image(self) -> None:
         att = build_from_clipboard()
@@ -458,9 +458,9 @@ class MainScreen(Screen):
             ))
             return
         # 给同名 clipboard.png 加序号避免重复
-        idx = sum(1 for a in self._attach.items if a.label.startswith("clipboard")) + 1
+        idx = sum(1 for a in self._attach_strip.items if a.label.startswith("clipboard")) + 1
         att.label = f"clipboard-{idx}.png"
-        self._attach.add(att)
+        self._attach_strip.add(att)
 
     def _append_paths_glob(self, arg: str) -> None:
         """支持 glob 和逗号分隔多个 pattern。"""
@@ -487,7 +487,7 @@ class MainScreen(Screen):
                 if att is not None:
                     added.append(att)
         if added:
-            self._attach.add_many(added)
+            self._attach_strip.add_many(added)
         parts = []
         if added:
             parts.append(f"[已追加 {len(added)} 个附件]")
@@ -689,7 +689,7 @@ class MainScreen(Screen):
             if att is not None:
                 added.append(att)
         if added:
-            self._attach.add_many(added)
+            self._attach_strip.add_many(added)
             await self._chat.add_system_message(f"[已通过粘贴追加 {len(added)} 个附件]")
         else:
             # 都不是可读文件，还回给输入框
