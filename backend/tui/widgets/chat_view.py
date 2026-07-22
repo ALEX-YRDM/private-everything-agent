@@ -269,6 +269,9 @@ class ChatView(VerticalScroll):
     }
     """
 
+    # 距底部这么多行内算"粘在底部"（给一点余量，避免抖动）
+    _STICK_EPSILON = 2
+
     def __init__(self):
         super().__init__()
         self._current_assistant: MessageBubble | None = None
@@ -277,76 +280,115 @@ class ChatView(VerticalScroll):
         # subagent_id → SubAgentBlock
         self._subagents: dict[str, Any] = {}
 
+    # ── 粘底控制 ────────────────────────────────────
+
+    def _is_at_bottom(self) -> bool:
+        """当前视图是否已经贴在底部（用户没有向上翻阅历史）。"""
+        try:
+            return (self.max_scroll_y - self.scroll_y) <= self._STICK_EPSILON
+        except Exception:
+            return True
+
+    def _follow_if_stuck(self, was_stuck: bool) -> None:
+        """挂载新内容前记录 was_stuck；这里根据它决定是否跟随。"""
+        if was_stuck:
+            self.scroll_end(animate=False)
+
+    def watch_virtual_size(self, old_size, new_size) -> None:
+        """
+        内容自身变高时（例如 MessageBubble 的 batch flush 让气泡长高），
+        只有变化前视图就贴着底才跟随；用户往上翻的场景不打断。
+        """
+        if not old_size or not new_size:
+            return
+        if new_size.height <= old_size.height:
+            return
+        try:
+            old_max = max(0, old_size.height - self.size.height)
+            if self.scroll_y >= old_max - self._STICK_EPSILON:
+                self.scroll_end(animate=False)
+        except Exception:
+            pass
+
     # ── 消息追加接口 ───────────────────────────────
 
     async def add_user_message(self, content: str) -> None:
         self._current_assistant = None
         self._current_thinking = None
+        stick = self._is_at_bottom()
         bubble = MessageBubble("user", content)
         await self.mount(bubble)
-        self.scroll_end(animate=False)
+        self._follow_if_stuck(stick)
 
     async def add_system_message(self, content: str) -> None:
+        stick = self._is_at_bottom()
         bubble = MessageBubble("system", content)
         await self.mount(bubble)
-        self.scroll_end(animate=False)
+        self._follow_if_stuck(stick)
 
     async def add_error_message(self, content: str) -> None:
+        stick = self._is_at_bottom()
         bubble = MessageBubble("error", content)
         await self.mount(bubble)
-        self.scroll_end(animate=False)
+        self._follow_if_stuck(stick)
 
     async def append_thinking(self, delta: str) -> None:
+        stick = self._is_at_bottom()
         if self._current_thinking is None:
             self._current_thinking = ThinkingBlock()
             await self.mount(self._current_thinking)
         self._current_thinking.append(delta)
-        self.scroll_end(animate=False)
+        self._follow_if_stuck(stick)
 
     async def append_content_delta(self, delta: str) -> None:
+        stick = self._is_at_bottom()
         if self._current_assistant is None:
             self._current_assistant = MessageBubble("assistant", "")
             await self.mount(self._current_assistant)
         self._current_assistant.append(delta)
-        self.scroll_end(animate=False)
+        # 首次 mount 后要显式跟一下；后续 batch flush 由 watch_virtual_size 兜底
+        self._follow_if_stuck(stick)
 
     async def add_tool_call(self, tc_id: str, name: str, args: dict) -> None:
+        stick = self._is_at_bottom()
         card = ToolCallCard(tc_id, name, args)
         self._tool_cards[tc_id] = card
         self._current_assistant = None
         await self.mount(card)
-        self.scroll_end(animate=False)
+        self._follow_if_stuck(stick)
 
     async def add_confirm_card(self, payload: dict) -> None:
-        """内联挂一张破坏性工具确认卡（不弹 modal）。"""
+        """内联挂一张破坏性工具确认卡（不弹 modal）。
+
+        破坏性工具确认必须让用户看见 → 无论用户是否在底部都强制滚到最下。
+        """
         import asyncio
         from .tool_confirm_card import ToolConfirmCard
         card = ToolConfirmCard(payload)
         self._current_assistant = None
         await self.mount(card)
-        # 让 layout / focus 完成一轮，再强制滚到底
         await asyncio.sleep(0)
         self.scroll_end(animate=False, force=True)
 
     async def start_subagent(self, subagent_id: str, task: str, session_id: str = "") -> None:
         from .subagent_block import SubAgentBlock
+        stick = self._is_at_bottom()
         block = SubAgentBlock(subagent_id, task, session_id)
         self._subagents[subagent_id] = block
         self._current_assistant = None
         await self.mount(block)
-        self.scroll_end(animate=False)
+        self._follow_if_stuck(stick)
 
     def apply_subagent_event(self, subagent_id: str, event: dict) -> None:
         block = self._subagents.get(subagent_id)
         if block is not None:
             block.apply_event(event)
-            self.scroll_end(animate=False)
+            # 不再无条件 scroll_end —— block 变高时 watch_virtual_size 会兜底
 
     def finish_subagent(self, subagent_id: str, result: str, error: str | None = None) -> None:
         block = self._subagents.get(subagent_id)
         if block is not None:
             block.mark_done(result, error)
-            self.scroll_end(animate=False)
 
     def finish_tool_call(self, tc_id: str, result: str) -> None:
         card = self._tool_cards.get(tc_id)
@@ -416,4 +458,5 @@ class ChatView(VerticalScroll):
                 card = self._tool_cards.get(tc_id)
                 if card:
                     card.mark_done(content)
+        # 加载完历史后统一滚到底部；这是"打开会话"场景，用户预期看到最新
         self.scroll_end(animate=False)
