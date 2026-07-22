@@ -43,6 +43,11 @@ dependencies = [
 
     # 日志
     "loguru>=0.7.0",
+
+    # TUI 客户端（mengdie-tui）
+    "textual>=0.80.0",
+    "websockets>=13.0",
+    "pyperclip>=1.9.0",
 ]
 
 [project.optional-dependencies]
@@ -54,6 +59,7 @@ dev = [
 
 [project.scripts]
 mengdie = "backend.cli:main"
+mengdie-tui = "backend.tui:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["backend"]
