@@ -7,6 +7,7 @@ visual=None 崩溃。RichLog 天生为 "append 内容" 设计，永远有有效 
 from __future__ import annotations
 
 import json
+import re
 from typing import Any
 
 from rich.markdown import Markdown
@@ -14,6 +15,27 @@ from rich.syntax import Syntax
 from rich.text import Text
 from textual.containers import VerticalScroll
 from textual.widgets import RichLog
+
+
+# assistant content 里 <think>...</think>（DeepSeek-R1 / GLM-Z1 等把 reasoning
+# 混在 content 中）的抽取。开放式（只有开标签没有闭标签）也按 thinking 处理，
+# 兼容流式期间正文还没到的情况。
+_THINK_RE = re.compile(r"<think>([\s\S]*?)(?:</think>|$)", re.IGNORECASE)
+
+
+def _split_think(raw: str) -> tuple[str, str]:
+    """(thinking, body) —— 从 raw 里抽出所有 <think> 段落。"""
+    if not raw or "<think>" not in raw.lower():
+        return "", raw or ""
+    chunks: list[str] = []
+
+    def _sub(m: re.Match) -> str:
+        chunks.append(m.group(1))
+        return ""
+
+    body = _THINK_RE.sub(_sub, raw)
+    body = re.sub(r"</think>", "", body, flags=re.IGNORECASE)
+    return "\n\n".join(c.strip() for c in chunks if c.strip()).strip(), body.strip()
 
 
 class _LogCard(RichLog):
@@ -116,11 +138,21 @@ class MessageBubble(_LogCard):
                     self.write(f"[yellow]{escaped}[/yellow]")
                 else:
                     self.write(escaped)
-        else:
+            return
+
+        # assistant：先把 <think>...</think> 抽出来单独渲染成 magenta 段
+        thinking, body = _split_think(text)
+        if thinking:
+            first_line = thinking.split("\n", 1)[0]
+            preview = first_line[:120].replace("[", r"\[")
+            ellipsis = "…" if len(thinking) > 120 else ""
+            self.write(f"[magenta dim italic]▸ think: {preview}{ellipsis}[/magenta dim italic]")
+            self.write("")
+        if body:
             try:
-                self.write(Markdown(text, code_theme="monokai"))
+                self.write(Markdown(body, code_theme="monokai"))
             except Exception:
-                self.write(text.replace("[", r"\["))
+                self.write(body.replace("[", r"\["))
 
 
 class ToolCallCard(_LogCard):
@@ -287,11 +319,14 @@ class ChatView(VerticalScroll):
 
     async def add_confirm_card(self, payload: dict) -> None:
         """内联挂一张破坏性工具确认卡（不弹 modal）。"""
+        import asyncio
         from .tool_confirm_card import ToolConfirmCard
         card = ToolConfirmCard(payload)
         self._current_assistant = None
         await self.mount(card)
-        self.scroll_end(animate=False)
+        # 让 layout / focus 完成一轮，再强制滚到底
+        await asyncio.sleep(0)
+        self.scroll_end(animate=False, force=True)
 
     async def start_subagent(self, subagent_id: str, task: str, session_id: str = "") -> None:
         from .subagent_block import SubAgentBlock
