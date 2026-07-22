@@ -1,0 +1,87 @@
+/* mengdie-tui 主题 */
+
+Screen {
+    background: $background;
+}
+
+#main-body {
+    height: 1fr;
+}
+
+#left-pane {
+    width: 22%;
+    min-width: 20;
+    max-width: 40;
+    border-right: solid $accent 30%;
+    padding: 0 1;
+}
+
+#left-title {
+    height: 1;
+    padding: 0 0 1 0;
+    color: $accent;
+}
+
+#session-list {
+    height: 1fr;
+    background: transparent;
+}
+
+#session-list > ListItem {
+    background: transparent;
+    padding: 0 1;
+}
+
+#session-list > ListItem.--highlight {
+    background: $accent 20%;
+}
+
+#center-pane {
+    width: 1fr;
+    padding: 0;
+}
+
+#center-pane ChatView {
+    height: 1fr;
+}
+
+#center-pane InputArea {
+    dock: bottom;
+    height: auto;
+    max-height: 12;
+    margin: 0 1 1 1;
+}
+
+#right-pane {
+    width: 28%;
+    min-width: 22;
+    max-width: 50;
+    border-left: solid $accent 30%;
+    padding: 0 1;
+}
+
+#right-title {
+    height: 1;
+    padding: 0 0 1 0;
+    color: $accent;
+}
+
+#right-placeholder {
+    color: $text-muted;
+    padding: 1;
+}
+
+MessageBubble {
+    height: auto;
+    margin: 0 1;
+}
+
+ToolCallCard {
+    height: auto;
+    margin: 0 1;
+}
+
+ThinkingBlock {
+    height: auto;
+    margin: 0 1;
+}
