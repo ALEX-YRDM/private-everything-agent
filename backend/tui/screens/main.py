@@ -29,7 +29,8 @@ from ..widgets.input_area import InputArea, MessageSubmitted, AtTriggered
 from ..widgets.session_list import (
     SessionDeleteRequested, SessionList, SessionRenameRequested, SessionSelected,
 )
-from ..widgets.skills_pane import SkillsPane
+from ..widgets.skills_pane import SkillsPane, SkillPreviewRequested
+from ..widgets.mcp_pane import MCPPane, MCPReconnectRequested, MCPToggleRequested
 from ..widgets.status_bar import StatusBar
 from ..widgets.todos_pane import TodosPane
 from ..widgets.tool_confirm_card import ConfirmDecided
@@ -37,6 +38,9 @@ from ..widgets.tool_confirm_card import ConfirmDecided
 from .file_preview import FilePreviewModal
 from .file_picker import FilePickerModal
 from .help import HelpModal
+from .palette import CommandPalette
+from .settings import SettingsScreen
+from .skill_detail import SkillDetailModal
 
 
 class MainScreen(Screen):
@@ -46,11 +50,14 @@ class MainScreen(Screen):
         Binding("ctrl+n",       "new_session",     "新建",     show=True),
         Binding("ctrl+c",       "interrupt",       "中断",     show=True, priority=True),
         Binding("ctrl+q",       "quit",            "退出",     show=True, priority=True),
-        Binding("ctrl+p",       "toggle_plan",     "PlanMode", show=True),
+        Binding("ctrl+f",       "palette",         "搜会话",   show=True, priority=True),
+        Binding("ctrl+b",       "toggle_plan",     "PlanMode", show=True),
+        Binding("ctrl+k",       "open_settings",   "设置",     show=True),
         Binding("f2",           "focus_input",     "聚焦输入", show=False),
         Binding("f3",           "show_pane('files')",  "文件",  show=True),
         Binding("f4",           "show_pane('todos')",  "Todos", show=True),
         Binding("f5",           "show_pane('skills')", "技能",  show=True),
+        Binding("f6",           "show_pane('mcp')",    "MCP",   show=True),
         Binding("question_mark", "help",           "帮助",     show=True),
         Binding("escape",       "focus_chat",      "退出输入", show=False),
     ]
@@ -75,11 +82,12 @@ class MainScreen(Screen):
                 yield ChatView()
                 yield InputArea()
             with Vertical(id="right-pane"):
-                yield Static("[b]文件[/b]  [dim](F3/F4/F5 切换)[/dim]", id="right-title")
-                # 三个 pane 都 mount，用 display 属性控制可见性
+                yield Static("[b]文件[/b]  [dim](F3/F4/F5/F6 切换)[/dim]", id="right-title")
+                # 四个 pane 都 mount，用 display 属性控制可见性
                 yield FilesPane()
                 yield TodosPane()
                 yield SkillsPane()
+                yield MCPPane()
         yield StatusBar()
 
     # ── 生命周期 ────────────────────────────────────
@@ -87,6 +95,14 @@ class MainScreen(Screen):
     async def on_mount(self) -> None:
         # 默认只显示文件树
         self._apply_pane_visibility()
+
+        # 拉一次全局 config 拿到当前 model（会话专属 model 后续再覆盖）
+        try:
+            cfg = await self.client.get_config()
+            self._status.model = cfg.get("model") or ""
+        except Exception:
+            pass
+
         self._refresh_status()
         await self._load_sessions()
 
@@ -119,6 +135,8 @@ class MainScreen(Screen):
     @property
     def _skills(self) -> SkillsPane:             return self.query_one(SkillsPane)
     @property
+    def _mcp(self) -> MCPPane:                   return self.query_one(MCPPane)
+    @property
     def _right_title(self) -> Static:            return self.query_one("#right-title", Static)
 
     # ── helpers ────────────────────────────────────
@@ -129,6 +147,9 @@ class MainScreen(Screen):
         for s in self._sessions_cache:
             if s["id"] == sid:
                 self._status.session_title = s.get("title") or ""
+                # 有会话专属 model 就用它，否则不变
+                if s.get("model"):
+                    self._status.model = s["model"]
                 break
 
     def _apply_pane_visibility(self) -> None:
@@ -136,10 +157,12 @@ class MainScreen(Screen):
         self._files.display = self._right_pane == "files"
         self._todos.display = self._right_pane == "todos"
         self._skills.display = self._right_pane == "skills"
+        self._mcp.display = self._right_pane == "mcp"
         title_map = {
-            "files":  "[b]文件[/b]  [dim](F3/F4/F5 切换)[/dim]",
-            "todos":  "[b]Todos[/b]  [dim](F3/F4/F5 切换)[/dim]",
-            "skills": "[b]技能[/b]  [dim](F3/F4/F5 切换)[/dim]",
+            "files":  "[b]文件[/b]  [dim](F3/F4/F5/F6 切换)[/dim]",
+            "todos":  "[b]Todos[/b]  [dim](F3/F4/F5/F6 切换)[/dim]",
+            "skills": "[b]技能[/b]  [dim](F3/F4/F5/F6 切换 · Enter 详情)[/dim]",
+            "mcp":    "[b]MCP[/b]  [dim](F3/F4/F5/F6 切换 · Enter 重连 · t 开关)[/dim]",
         }
         self._right_title.update(title_map.get(self._right_pane, ""))
 
@@ -217,6 +240,23 @@ class MainScreen(Screen):
         elif etype == "tool_confirm":
             # 内联卡片，不弹 modal
             await self._chat.add_confirm_card(evt)
+        elif etype == "subagent_start":
+            await self._chat.start_subagent(
+                evt.get("subagent_id", ""),
+                evt.get("task", ""),
+                evt.get("session_id", ""),
+            )
+        elif etype == "subagent_event":
+            self._chat.apply_subagent_event(
+                evt.get("subagent_id", ""),
+                evt.get("event") or {},
+            )
+        elif etype == "subagent_done":
+            self._chat.finish_subagent(
+                evt.get("subagent_id", ""),
+                evt.get("result", ""),
+                evt.get("error"),
+            )
         elif etype == "plan_mode_update":
             self._status.plan_mode = bool(evt.get("plan_mode"))
         elif etype == "todos_update":
@@ -278,12 +318,37 @@ class MainScreen(Screen):
                 await self._chat.add_system_message("[正在删除…]")
                 await self.on_session_delete_requested(SessionDeleteRequested(target))
             return
+        if content.startswith("/paste-img"):
+            # 拿一张剪贴板图片附着到下一条消息 —— 简化：直接发一条只带图的消息
+            rest = content[len("/paste-img"):].strip()
+            await self._send_clipboard_image(rest)
+            return
 
         # 普通消息
         await self._chat.add_user_message(content)
         self._status.streaming = True
         try:
             await self.client.send_message(content)
+        except Exception as e:
+            await self._chat.add_error_message(f"发送失败：{e}")
+            self._status.streaming = False
+
+    async def _send_clipboard_image(self, prompt: str) -> None:
+        """/paste-img [附言] —— 从剪贴板拿图 + 可选文字，一并发送。"""
+        from ..imaging import paste_clipboard_image_bytes
+        data = paste_clipboard_image_bytes()
+        if not data:
+            await self._chat.add_error_message(
+                "剪贴板里没有图片，或未安装 pngpaste (macOS) / xclip (Linux)"
+            )
+            return
+        import base64
+        image_uri = "data:image/png;base64," + base64.b64encode(data).decode()
+        text = prompt or "（剪贴板图片）"
+        await self._chat.add_user_message(text)
+        self._status.streaming = True
+        try:
+            await self.client.send_message(text, images=[image_uri])
         except Exception as e:
             await self._chat.add_error_message(f"发送失败：{e}")
             self._status.streaming = False
@@ -330,14 +395,48 @@ class MainScreen(Screen):
     async def on_file_preview_requested(self, evt: FilePreviewRequested) -> None:
         if self._current_session_id is None:
             return
-        # 图片等二进制文件：TUI 无法真实预览，给个提示
         ext = evt.path.rsplit(".", 1)[-1].lower() if "." in evt.path else ""
-        if ext in {"png", "jpg", "jpeg", "gif", "webp", "svg", "bmp", "ico", "avif",
-                   "pdf", "zip", "tar", "gz", "mp4", "mov", "mp3"}:
+        image_exts = {"png", "jpg", "jpeg", "gif", "webp", "bmp"}
+        binary_exts = {"pdf", "zip", "tar", "gz", "mp4", "mov", "mp3", "ico", "avif"}
+
+        # 图片：内联渲染（若终端支持）；否则给提示
+        if ext in image_exts:
+            from ..imaging import detect_terminal, render_image_bytes
+            kind = detect_terminal()
+            if kind == "none":
+                await self._chat.add_system_message(
+                    f"⚠  当前终端不支持内联渲染「{evt.path}」，请到 web UI 查看"
+                )
+                return
+            try:
+                # 直接从后端拉原始二进制
+                r = await self.client.http.get(
+                    f"/api/sessions/{self._current_session_id}/file-raw",
+                    params={"path": evt.path},
+                )
+                r.raise_for_status()
+                seq = render_image_bytes(r.content)
+            except Exception as e:
+                await self._chat.add_error_message(f"读取图片失败：{e}")
+                return
+            if seq is None:
+                await self._chat.add_system_message(
+                    f"⚠  当前终端不支持内联渲染「{evt.path}」"
+                )
+                return
+            # 把 iTerm2/kitty 转义序列作为普通文本写入 —— 系统消息里
             await self._chat.add_system_message(
-                f"⚠  终端无法预览「{evt.path}」（二进制/媒体文件），请到 web UI 查看"
+                f"预览：{evt.path}\n{seq}"
             )
             return
+
+        # 其他二进制：仍然拒绝预览
+        if ext in binary_exts:
+            await self._chat.add_system_message(
+                f"⚠  终端无法预览「{evt.path}」（二进制/媒体文件）"
+            )
+            return
+
         try:
             data = await self.client.get_file_content(self._current_session_id, evt.path)
         except Exception as e:
@@ -364,6 +463,28 @@ class MainScreen(Screen):
             FilePickerModal(self.client, self._current_session_id, evt.initial_query),
             _cb,
         )
+
+    async def on_skill_preview_requested(self, evt: SkillPreviewRequested) -> None:
+        try:
+            detail = await self.client.get_skill(evt.name)
+        except Exception as e:
+            await self._chat.add_error_message(f"读取 skill 失败：{e}")
+            return
+        await self.app.push_screen(SkillDetailModal(detail))
+
+    async def on_mcp_reconnect_requested(self, evt: MCPReconnectRequested) -> None:
+        try:
+            await self.client.reconnect_mcp(evt.server_id)
+            await self._refresh_mcp()
+        except Exception as e:
+            await self._chat.add_error_message(f"MCP 重连失败：{e}")
+
+    async def on_mcp_toggle_requested(self, evt: MCPToggleRequested) -> None:
+        try:
+            await self.client.toggle_mcp(evt.server_id)
+            await self._refresh_mcp()
+        except Exception as e:
+            await self._chat.add_error_message(f"MCP 切换启用状态失败：{e}")
 
     # ── action 快捷键 ───────────────────────────────
 
@@ -397,13 +518,59 @@ class MainScreen(Screen):
         self.app.exit()
 
     def action_show_pane(self, pane: str) -> None:
-        if pane not in ("files", "todos", "skills"):
+        if pane not in ("files", "todos", "skills", "mcp"):
             return
         self._right_pane = pane
         self._apply_pane_visibility()
+        # 切到 MCP 时懒加载一次
+        if pane == "mcp":
+            asyncio.create_task(self._refresh_mcp())
+
+    async def _refresh_mcp(self) -> None:
+        try:
+            servers = await self.client.list_mcp_servers()
+            self._mcp.set_servers(servers)
+        except Exception as e:
+            await self._chat.add_error_message(f"加载 MCP 列表失败：{e}")
 
     async def action_help(self) -> None:
         await self.app.push_screen(HelpModal())
+
+    async def action_palette(self) -> None:
+        """Ctrl-P 弹会话快速搜索。"""
+        def _cb(session_id: str | None) -> None:
+            if session_id and session_id != self._current_session_id:
+                asyncio.create_task(self._switch_session(session_id))
+
+        await self.app.push_screen(
+            CommandPalette(self._sessions_cache), _cb,
+        )
+
+    async def action_open_settings(self) -> None:
+        """Ctrl-, 打开设置屏。"""
+        try:
+            cfg = await self.client.get_config()
+            models = await self.client.list_models()
+        except Exception as e:
+            await self._chat.add_error_message(f"加载设置失败：{e}")
+            return
+        current = cfg.get("model") or ""
+
+        def _cb(new_model: str | None) -> None:
+            if new_model and new_model != current:
+                asyncio.create_task(self._switch_model(new_model))
+
+        await self.app.push_screen(
+            SettingsScreen(self.client, cfg, models, current), _cb,
+        )
+
+    async def _switch_model(self, model_id: str) -> None:
+        try:
+            await self.client.switch_model(model_id)
+            self._status.model = model_id
+            await self._chat.add_system_message(f"[已切换模型 → {model_id}]")
+        except Exception as e:
+            await self._chat.add_error_message(f"切换模型失败：{e}")
 
     async def action_toggle_plan(self) -> None:
         if self._current_session_id is None:

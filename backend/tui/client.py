@@ -141,6 +141,37 @@ class MengdieClient:
         r.raise_for_status()
         return r.json()
 
+    # ── MCP ────────────────────────────────────────────
+
+    async def list_mcp_servers(self) -> list[dict]:
+        r = await self.http.get("/api/mcp-servers")
+        r.raise_for_status()
+        # 返回结构：{ servers: [...] } 或直接 list —— 兼容处理
+        data = r.json()
+        if isinstance(data, list):
+            return data
+        return data.get("servers") or data.get("data") or []
+
+    async def reconnect_mcp(self, server_id: int) -> None:
+        r = await self.http.post(f"/api/mcp-servers/{server_id}/reconnect")
+        r.raise_for_status()
+
+    async def toggle_mcp(self, server_id: int) -> None:
+        r = await self.http.post(f"/api/mcp-servers/{server_id}/toggle")
+        r.raise_for_status()
+
+    # ── 模型 ───────────────────────────────────────────
+
+    async def list_models(self) -> list[dict]:
+        r = await self.http.get("/api/models")
+        r.raise_for_status()
+        data = r.json()
+        return data.get("models") if isinstance(data, dict) else data
+
+    async def switch_model(self, model_id: str) -> None:
+        r = await self.http.post("/api/models/switch", json={"model_id": model_id})
+        r.raise_for_status()
+
     # ── WebSocket ──────────────────────────────────────
 
     @property
@@ -187,12 +218,24 @@ class MengdieClient:
                     evt = json.loads(raw)
                 except json.JSONDecodeError:
                     continue
-                if self._on_event is not None:
+                if self._on_event is None:
+                    continue
+                # 单条事件 raise 不能打断 recv loop，否则后续 done 事件会丢
+                try:
                     result = self._on_event(evt)
                     if asyncio.iscoroutine(result):
                         await result
+                except Exception:
+                    import traceback
+                    from loguru import logger
+                    logger.exception(
+                        f"TUI on_event 抛错，事件被吞：type={evt.get('type')}"
+                    )
         except (websockets.ConnectionClosed, asyncio.CancelledError):
             pass
+        except Exception:
+            from loguru import logger
+            logger.exception("TUI WS recv loop 意外崩溃")
         finally:
             if self._on_close is not None:
                 try:

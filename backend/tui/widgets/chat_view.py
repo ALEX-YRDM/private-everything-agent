@@ -44,7 +44,12 @@ class _LogCard(RichLog):
 
 
 class MessageBubble(_LogCard):
-    """一条消息 = 一个 widget。"""
+    """一条消息 = 一个 widget。
+
+    streaming 时使用 delta 缓冲：每次 append() 只累积到 _pending，
+    真正 refresh 由 batch flush timer 触发（60ms 一次）；避免高频
+    markdown 重渲染造成的卡顿。
+    """
 
     ROLE_STYLE = {
         "user":      ("cyan bold",    "▎ 你"),
@@ -54,21 +59,42 @@ class MessageBubble(_LogCard):
         "error":     ("red bold",     "▎ 错误"),
     }
 
+    #: 缓冲刷新周期（秒）
+    FLUSH_INTERVAL = 0.06
+
     def __init__(self, role: str, content: str = ""):
         super().__init__()
         self.role = role
         self._raw = content
-        # 用 CSS class 触发 border 颜色
+        self._pending: str = ""
+        self._flush_timer = None
         self.add_class(f"-{role}")
         self._refresh()
 
     def set_content(self, content: str) -> None:
         self._raw = content
+        self._pending = ""
         self._refresh()
 
     def append(self, delta: str) -> None:
-        self._raw += delta
+        self._pending += delta
+        # 定时器还没起就起一个；已经起了就等下一 tick
+        if self._flush_timer is None:
+            self._flush_timer = self.set_interval(self.FLUSH_INTERVAL, self._flush)
+
+    def _flush(self) -> None:
+        if not self._pending:
+            return
+        self._raw += self._pending
+        self._pending = ""
         self._refresh()
+
+    def stop_streaming(self) -> None:
+        """由 ChatView.finalize_turn 调用，flush 最后一次并停 timer。"""
+        self._flush()
+        if self._flush_timer is not None:
+            self._flush_timer.stop()
+            self._flush_timer = None
 
     def _refresh(self) -> None:
         style, label = self.ROLE_STYLE.get(self.role, ("white", f"▎ {self.role}"))
@@ -216,6 +242,8 @@ class ChatView(VerticalScroll):
         self._current_assistant: MessageBubble | None = None
         self._current_thinking: ThinkingBlock | None = None
         self._tool_cards: dict[str, ToolCallCard] = {}
+        # subagent_id → SubAgentBlock
+        self._subagents: dict[str, Any] = {}
 
     # ── 消息追加接口 ───────────────────────────────
 
@@ -265,6 +293,26 @@ class ChatView(VerticalScroll):
         await self.mount(card)
         self.scroll_end(animate=False)
 
+    async def start_subagent(self, subagent_id: str, task: str, session_id: str = "") -> None:
+        from .subagent_block import SubAgentBlock
+        block = SubAgentBlock(subagent_id, task, session_id)
+        self._subagents[subagent_id] = block
+        self._current_assistant = None
+        await self.mount(block)
+        self.scroll_end(animate=False)
+
+    def apply_subagent_event(self, subagent_id: str, event: dict) -> None:
+        block = self._subagents.get(subagent_id)
+        if block is not None:
+            block.apply_event(event)
+            self.scroll_end(animate=False)
+
+    def finish_subagent(self, subagent_id: str, result: str, error: str | None = None) -> None:
+        block = self._subagents.get(subagent_id)
+        if block is not None:
+            block.mark_done(result, error)
+            self.scroll_end(animate=False)
+
     def finish_tool_call(self, tc_id: str, result: str) -> None:
         card = self._tool_cards.get(tc_id)
         if card:
@@ -276,6 +324,15 @@ class ChatView(VerticalScroll):
             card.mark_denied(reason)
 
     def finalize_turn(self) -> None:
+        # 停止 streaming 的 flush timer，把最后一批 delta 推出去
+        if self._current_assistant is not None:
+            try:
+                self._current_assistant.stop_streaming()
+            except Exception:
+                pass
+        if self._current_thinking is not None:
+            # thinking block 现在也有 append，但没批量 flush；无需特殊处理
+            pass
         self._current_assistant = None
         self._current_thinking = None
 
