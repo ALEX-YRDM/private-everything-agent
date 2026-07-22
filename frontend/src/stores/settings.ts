@@ -1,7 +1,7 @@
 import { ref, computed } from 'vue'
 import { defineStore } from 'pinia'
-import { api, type ModelInfo, type ProviderKey, type SystemSkill, type UserSkill, type AppConfig } from '../api/http'
-export type { SystemSkill, UserSkill }
+import { api, type ModelInfo, type ProviderKey, type SystemSkill, type UserSkill, type Skill, type AppConfig } from '../api/http'
+export type { SystemSkill, UserSkill, Skill }
 
 export type { ProviderKey }
 
@@ -13,8 +13,24 @@ export const useSettingsStore = defineStore('settings', () => {
   const tools = ref<string[]>([])
   const config = ref<Partial<AppConfig>>({})
   const showSettings = ref(false)
-  const systemSkills = ref<SystemSkill[]>([])
-  const userSkills = ref<UserSkill[]>([])
+  const skills = ref<Skill[]>([])
+
+  // 派生：仅 builtin / 仅 user（供旧组件使用）
+  const systemSkills = computed<SystemSkill[]>(() =>
+    skills.value.filter((s) => s.tier === 'builtin').map((s) => ({
+      name: s.name,
+      description: s.description,
+      available: s.available,
+      requires_bins: s.requires_bins,
+      requires_env: s.requires_env,
+    })),
+  )
+  const userSkills = computed<UserSkill[]>(() =>
+    skills.value.filter((s) => s.tier === 'user').map((s) => ({
+      name: s.name,
+      description: s.description,
+    })),
+  )
 
   const llmParams = ref({
     max_tokens: 4096,
@@ -117,15 +133,25 @@ export const useSettingsStore = defineStore('settings', () => {
 
   async function loadSkills() {
     try {
-      const [sysData, userData] = await Promise.all([
-        api.skills.listSystem(),
-        api.skills.listUser(),
-      ])
-      systemSkills.value = sysData.skills
-      userSkills.value = userData.skills
+      const data = await api.skills.list()
+      skills.value = data.skills
     } catch (e) {
       console.error('加载技能列表失败', e)
     }
+  }
+
+  async function installSkill(source: 'path' | 'git', location: string, overwrite = false) {
+    await api.skills.install({ source, location, overwrite })
+    await loadSkills()
+  }
+
+  async function removeSkill(name: string) {
+    await api.skills.remove(name)
+    await loadSkills()
+  }
+
+  async function getSkillDetail(name: string) {
+    return api.skills.get(name)
   }
 
   async function setModel(modelId: string) {
@@ -159,12 +185,16 @@ export const useSettingsStore = defineStore('settings', () => {
     getModelParams,
     systemSkills,
     userSkills,
+    skills,
     llmParams,
     init,
     setModel,
     loadModels,
     loadProviders,
     loadSkills,
+    installSkill,
+    removeSkill,
+    getSkillDetail,
     updateLlmParams,
   }
 })

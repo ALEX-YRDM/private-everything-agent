@@ -112,6 +112,24 @@ export interface UserSkill {
   description: string
 }
 
+/** 新的统一 Skill 类型（后端 GET /api/skills 返回结构） */
+export interface Skill {
+  name: string
+  description: string
+  tier: 'user' | 'builtin'
+  when: string
+  path: string
+  available: boolean
+  missing: string[]            // 如 ["bin:o2", "env:XXX_KEY"]
+  requires_bins: string[]
+  requires_env: string[]
+  parse_error: string | null
+}
+
+export interface SkillDetail extends Skill {
+  content: string              // 完整 SKILL.md 原文
+}
+
 export interface ScheduledTask {
   id: number
   name: string
@@ -323,6 +341,21 @@ export const api = {
   skills: {
     listSystem: () => request<{ skills: SystemSkill[] }>('/api/skills/system'),
     listUser: () => request<{ skills: UserSkill[] }>('/api/skills/user'),
+    /** 新统一列表：返回所有 tier 的 skill */
+    list: (includeBroken = false) =>
+      request<{ skills: Skill[] }>(`/api/skills${includeBroken ? '?include_broken=true' : ''}`),
+    get: (name: string) =>
+      request<SkillDetail>(`/api/skills/${encodeURIComponent(name)}`),
+    install: (data: { source: 'path' | 'git'; location: string; name?: string; overwrite?: boolean }) =>
+      request<{ ok: boolean; installed_at: string; skill: Skill | null }>(
+        '/api/skills/install',
+        { method: 'POST', body: JSON.stringify(data) },
+      ),
+    remove: (name: string) =>
+      request<{ ok: boolean; removed: boolean }>(
+        `/api/skills/${encodeURIComponent(name)}`,
+        { method: 'DELETE' },
+      ),
   },
   tasks: {
     list: () => request<{ tasks: ScheduledTask[] }>('/api/tasks'),
