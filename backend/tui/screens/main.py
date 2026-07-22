@@ -23,17 +23,32 @@ from textual.screen import Screen
 from textual.widgets import Header, Static
 
 from ..client import MengdieClient
+from ..widgets.attachment_strip import (
+    Attachment, AttachmentStrip, AttachmentsChanged,
+    build_from_clipboard, build_from_path,
+)
 from ..widgets.chat_view import ChatView
 from ..widgets.files_pane import FilesPane, FilePreviewRequested
-from ..widgets.input_area import InputArea, MessageSubmitted, AtTriggered
+from ..widgets.input_area import (
+    AtTriggered, InputArea, MessageSubmitted, PasteTextRequested,
+)
+from ..widgets.scheduler_pane import (
+    SchedulerDeleteRequested, SchedulerPane, SchedulerRefreshRequested,
+    SchedulerRunNowRequested, SchedulerToggleRequested,
+)
 from ..widgets.session_list import (
     SessionDeleteRequested, SessionList, SessionRenameRequested, SessionSelected,
 )
 from ..widgets.skills_pane import SkillsPane, SkillPreviewRequested
+from ..widgets.slash_popup import SlashPopup
+from ..widgets.subagent_block import SubAgentOpenRequested
 from ..widgets.mcp_pane import MCPPane, MCPReconnectRequested, MCPToggleRequested
 from ..widgets.status_bar import StatusBar
 from ..widgets.todos_pane import TodosPane
 from ..widgets.tool_confirm_card import ConfirmDecided
+from ..widgets.trusts_pane import (
+    TrustDeleteRequested, TrustsPane, TrustsPaneRefreshRequested,
+)
 
 from .file_preview import FilePreviewModal
 from .file_picker import FilePickerModal
@@ -41,6 +56,8 @@ from .help import HelpModal
 from .palette import CommandPalette
 from .settings import SettingsScreen
 from .skill_detail import SkillDetailModal
+from .subagent_detail import SubAgentDetailModal
+from .working_dir import WorkingDirPickerModal
 
 
 class MainScreen(Screen):
@@ -53,11 +70,17 @@ class MainScreen(Screen):
         Binding("ctrl+f",       "palette",         "搜会话",   show=True, priority=True),
         Binding("ctrl+b",       "toggle_plan",     "PlanMode", show=True),
         Binding("ctrl+k",       "open_settings",   "设置",     show=True),
+        Binding("ctrl+w",       "open_cwd_picker", "工作目录", show=True),
+        Binding("ctrl+backslash", "toggle_left",   "左栏",     show=True),
+        Binding("ctrl+right_square_bracket", "toggle_right", "右栏", show=True),
         Binding("f2",           "focus_input",     "聚焦输入", show=False),
         Binding("f3",           "show_pane('files')",  "文件",  show=True),
         Binding("f4",           "show_pane('todos')",  "Todos", show=True),
         Binding("f5",           "show_pane('skills')", "技能",  show=True),
         Binding("f6",           "show_pane('mcp')",    "MCP",   show=True),
+        Binding("f7",           "show_pane('trusts')", "Trust", show=True),
+        Binding("f8",           "show_pane('tasks')",  "定时",  show=True),
+        Binding("f12",          "toggle_select_mode", "选择",   show=True),
         Binding("question_mark", "help",           "帮助",     show=True),
         Binding("escape",       "focus_chat",      "退出输入", show=False),
     ]
@@ -69,6 +92,9 @@ class MainScreen(Screen):
         self._current_session_id: str | None = None
         self._sessions_cache: list[dict] = []
         self._right_pane: str = "files"
+        self._left_hidden: bool = False
+        self._right_hidden: bool = False
+        self._select_mode: bool = False
 
     # ── 布局 ────────────────────────────────────────
 
@@ -80,14 +106,19 @@ class MainScreen(Screen):
                 yield SessionList()
             with Vertical(id="center-pane"):
                 yield ChatView()
-                yield InputArea()
+                with Vertical(id="input-container"):
+                    yield SlashPopup()
+                    yield AttachmentStrip()
+                    yield InputArea()
             with Vertical(id="right-pane"):
-                yield Static("[b]文件[/b]  [dim](F3/F4/F5/F6 切换)[/dim]", id="right-title")
-                # 四个 pane 都 mount，用 display 属性控制可见性
+                yield Static("[b]文件[/b]  [dim](F3/F4/F5/F6/F7/F8 切换)[/dim]", id="right-title")
+                # 全部 mount，用 display 属性控制可见性
                 yield FilesPane()
                 yield TodosPane()
                 yield SkillsPane()
                 yield MCPPane()
+                yield TrustsPane()
+                yield SchedulerPane()
         yield StatusBar()
 
     # ── 生命周期 ────────────────────────────────────
@@ -95,6 +126,12 @@ class MainScreen(Screen):
     async def on_mount(self) -> None:
         # 默认只显示文件树
         self._apply_pane_visibility()
+
+        # 绑定 slash popup 到 InputArea
+        try:
+            self.query_one(InputArea).bind_slash_popup(self.query_one(SlashPopup))
+        except Exception:
+            pass
 
         # 拉一次全局 config 拿到当前 model（会话专属 model 后续再覆盖）
         try:
@@ -129,6 +166,8 @@ class MainScreen(Screen):
     @property
     def _input(self) -> InputArea:               return self.query_one(InputArea)
     @property
+    def _attach(self) -> AttachmentStrip:        return self.query_one(AttachmentStrip)
+    @property
     def _files(self) -> FilesPane:               return self.query_one(FilesPane)
     @property
     def _todos(self) -> TodosPane:               return self.query_one(TodosPane)
@@ -136,6 +175,10 @@ class MainScreen(Screen):
     def _skills(self) -> SkillsPane:             return self.query_one(SkillsPane)
     @property
     def _mcp(self) -> MCPPane:                   return self.query_one(MCPPane)
+    @property
+    def _trusts(self) -> TrustsPane:             return self.query_one(TrustsPane)
+    @property
+    def _tasks(self) -> SchedulerPane:           return self.query_one(SchedulerPane)
     @property
     def _right_title(self) -> Static:            return self.query_one("#right-title", Static)
 
@@ -158,11 +201,15 @@ class MainScreen(Screen):
         self._todos.display = self._right_pane == "todos"
         self._skills.display = self._right_pane == "skills"
         self._mcp.display = self._right_pane == "mcp"
+        self._trusts.display = self._right_pane == "trusts"
+        self._tasks.display = self._right_pane == "tasks"
         title_map = {
-            "files":  "[b]文件[/b]  [dim](F3/F4/F5/F6 切换)[/dim]",
-            "todos":  "[b]Todos[/b]  [dim](F3/F4/F5/F6 切换)[/dim]",
-            "skills": "[b]技能[/b]  [dim](F3/F4/F5/F6 切换 · Enter 详情)[/dim]",
-            "mcp":    "[b]MCP[/b]  [dim](F3/F4/F5/F6 切换 · Enter 重连 · t 开关)[/dim]",
+            "files":  "[b]文件[/b]  [dim](F3-F8 切换)[/dim]",
+            "todos":  "[b]Todos[/b]  [dim](F3-F8 切换)[/dim]",
+            "skills": "[b]技能[/b]  [dim](F3-F8 · Enter 详情)[/dim]",
+            "mcp":    "[b]MCP[/b]  [dim](F3-F8 · Enter 重连 · t 开关)[/dim]",
+            "trusts": "[b]信任[/b]  [dim](Del 删除 · r 刷新)[/dim]",
+            "tasks":  "[b]定时任务[/b]  [dim](t 开关 · r 立即执行 · d 删)[/dim]",
         }
         self._right_title.update(title_map.get(self._right_pane, ""))
 
@@ -318,40 +365,335 @@ class MainScreen(Screen):
                 await self._chat.add_system_message("[正在删除…]")
                 await self.on_session_delete_requested(SessionDeleteRequested(target))
             return
-        if content.startswith("/paste-img"):
-            # 拿一张剪贴板图片附着到下一条消息 —— 简化：直接发一条只带图的消息
-            rest = content[len("/paste-img"):].strip()
-            await self._send_clipboard_image(rest)
+        # 附件相关
+        if content.startswith("/paste-img") or content.startswith("/paste"):
+            # 从剪贴板追加一张图到附件区（不立即发送）
+            rest = ""
+            if content.startswith("/paste-img"):
+                rest = content[len("/paste-img"):].strip()
+            elif content.startswith("/paste"):
+                rest = content[len("/paste"):].strip()
+            self._append_clipboard_image()
+            if rest:
+                # 把余下的文字回填到输入框
+                self._input.text = rest
+            return
+        if content == "/attach-clear":
+            self._attach.clear_items()
+            await self._chat.add_system_message("[已清空附件]")
+            return
+        if content.startswith("/attach"):
+            rest = content[len("/attach"):].strip()
+            if not rest:
+                await self._chat.add_system_message(
+                    "用法：/attach <path>  支持 glob 和逗号分隔多个 pattern"
+                )
+                return
+            self._append_paths_glob(rest)
+            return
+        if content.startswith("/copy"):
+            arg = content[len("/copy"):].strip() or "last"
+            await self._copy_last(arg)
+            return
+        if content.startswith("/export"):
+            arg = content[len("/export"):].strip() or "md"
+            await self._export_session(arg)
+            return
+        if content.startswith("/cwd"):
+            arg = content[len("/cwd"):].strip()
+            if not arg:
+                await self._open_working_dir_picker()
+                return
+            await self._set_working_dir(arg)
+            return
+        if content.startswith("/model"):
+            arg = content[len("/model"):].strip()
+            if not arg:
+                await self.action_open_settings()
+                return
+            await self._set_session_model(arg)
+            return
+        if content == "/trusts":
+            await self._show_trusts()
             return
 
-        # 普通消息
-        await self._chat.add_user_message(content)
+        # 普通消息 —— 带上附件（如果有）
+        atts = self._attach.items
+        images = [a.data_uri for a in atts if a.image and a.data_uri]
+        files_payload: list[dict] = []
+        for a in atts:
+            if a.image:
+                continue
+            if a.data_uri is None:
+                continue
+            files_payload.append({
+                "name": a.label,
+                "mime_type": a.mime_type or "application/octet-stream",
+                "content": a.data_uri,  # base64
+                "size": a.size,
+            })
+
+        await self._chat.add_user_message(
+            content + (f"\n[附件 {len(atts)}]" if atts else "")
+        )
         self._status.streaming = True
         try:
-            await self.client.send_message(content)
+            await self.client.send_message(
+                content,
+                images=images or None,
+                files=files_payload or None,
+            )
         except Exception as e:
             await self._chat.add_error_message(f"发送失败：{e}")
             self._status.streaming = False
+        finally:
+            # 发送后清空附件区
+            self._attach.clear_items()
+
+    def _append_clipboard_image(self) -> None:
+        att = build_from_clipboard()
+        if att is None:
+            asyncio.create_task(self._chat.add_error_message(
+                "剪贴板里没有图片，或未安装 pngpaste (macOS) / xclip (Linux)"
+            ))
+            return
+        # 给同名 clipboard.png 加序号避免重复
+        idx = sum(1 for a in self._attach.items if a.label.startswith("clipboard")) + 1
+        att.label = f"clipboard-{idx}.png"
+        self._attach.add(att)
+
+    def _append_paths_glob(self, arg: str) -> None:
+        """支持 glob 和逗号分隔多个 pattern。"""
+        import glob as _glob
+        from pathlib import Path
+
+        patterns = [p.strip() for p in arg.split(",") if p.strip()]
+        added: list[Attachment] = []
+        missed: list[str] = []
+        for pat in patterns:
+            expanded = str(Path(pat).expanduser())
+            matches = _glob.glob(expanded, recursive=True)
+            if not matches:
+                # 直接当路径试一下
+                if Path(expanded).is_file():
+                    matches = [expanded]
+            if not matches:
+                missed.append(pat)
+                continue
+            for m in sorted(matches):
+                if not Path(m).is_file():
+                    continue
+                att = build_from_path(m)
+                if att is not None:
+                    added.append(att)
+        if added:
+            self._attach.add_many(added)
+        parts = []
+        if added:
+            parts.append(f"[已追加 {len(added)} 个附件]")
+        if missed:
+            parts.append(f"[未匹配：{', '.join(missed)}]")
+        if parts:
+            asyncio.create_task(self._chat.add_system_message(" ".join(parts)))
+
+    async def _copy_last(self, arg: str) -> None:
+        """把最新一条 assistant 消息复制到系统剪贴板。"""
+        import shutil
+        import subprocess
+        import sys
+
+        if self._current_session_id is None:
+            return
+        try:
+            msgs = await self.client.get_messages(self._current_session_id)
+        except Exception as e:
+            await self._chat.add_error_message(f"读取历史失败：{e}")
+            return
+        text = ""
+        for m in reversed(msgs):
+            if m.get("role") == "assistant" and (m.get("content") or "").strip():
+                text = m["content"]
+                break
+        if not text:
+            await self._chat.add_system_message("[没有可复制的 assistant 消息]")
+            return
+
+        cmd: list[str] | None = None
+        if sys.platform == "darwin" and shutil.which("pbcopy"):
+            cmd = ["pbcopy"]
+        elif shutil.which("wl-copy"):
+            cmd = ["wl-copy"]
+        elif shutil.which("xclip"):
+            cmd = ["xclip", "-selection", "clipboard"]
+        if cmd is None:
+            await self._chat.add_error_message(
+                "找不到 pbcopy/wl-copy/xclip；无法复制到系统剪贴板"
+            )
+            return
+        try:
+            p = subprocess.run(cmd, input=text.encode("utf-8"), timeout=5)
+            if p.returncode == 0:
+                await self._chat.add_system_message(f"[已复制 {len(text)} 字节到剪贴板]")
+            else:
+                await self._chat.add_error_message("复制失败（子进程返回非 0）")
+        except Exception as e:
+            await self._chat.add_error_message(f"复制失败：{e}")
+
+    async def _export_session(self, fmt: str) -> None:
+        """把当前会话 dump 成 markdown（简版）。"""
+        from pathlib import Path
+
+        if self._current_session_id is None:
+            return
+        try:
+            msgs = await self.client.get_messages(self._current_session_id)
+        except Exception as e:
+            await self._chat.add_error_message(f"读取历史失败：{e}")
+            return
+        lines: list[str] = [f"# 梦蝶导出 · {self._current_session_id[:8]}", ""]
+        for m in msgs:
+            role = m.get("role")
+            content = m.get("content") or ""
+            if role == "user":
+                lines.append(f"## 用户\n\n{content}\n")
+            elif role == "assistant":
+                lines.append(f"## 梦蝶\n\n{content}\n")
+            elif role == "tool":
+                lines.append(f"### 工具结果 ({m.get('name','?')})\n\n```\n{content}\n```\n")
+        out_path = Path.home() / f"mengdie-export-{self._current_session_id[:8]}.md"
+        try:
+            out_path.write_text("\n".join(lines), encoding="utf-8")
+        except Exception as e:
+            await self._chat.add_error_message(f"写入失败：{e}")
+            return
+        await self._chat.add_system_message(f"[已导出到 {out_path}]")
+
+    async def _show_trusts(self) -> None:
+        if self._current_session_id is None:
+            return
+        try:
+            r = await self.client.http.get(
+                f"/api/sessions/{self._current_session_id}/trusts"
+            )
+            r.raise_for_status()
+            data = r.json()
+        except Exception as e:
+            await self._chat.add_error_message(f"读取 trusts 失败：{e}")
+            return
+        paths = data.get("paths") or []
+        cmds = data.get("commands") or []
+        lines = ["已信任目录："]
+        lines.extend([f"  · {p}" for p in paths] or ["  (无)"])
+        lines.append("已信任命令前缀：")
+        lines.extend([f"  · {c}" for c in cmds] or ["  (无)"])
+        await self._chat.add_system_message("\n".join(lines))
+
+    async def _set_working_dir(self, path: str) -> None:
+        if self._current_session_id is None:
+            return
+        try:
+            r = await self.client.http.put(
+                f"/api/sessions/{self._current_session_id}/working-dir",
+                json={"working_dir": path or None},
+            )
+            r.raise_for_status()
+        except Exception as e:
+            await self._chat.add_error_message(f"设置 cwd 失败：{e}")
+            return
+        # 更新缓存 + 重新 bind 文件树
+        for s in self._sessions_cache:
+            if s["id"] == self._current_session_id:
+                s["working_dir"] = path or None
+                break
+        self._files.bind_client(self.client, self._current_session_id)
+        await self._chat.add_system_message(f"[工作目录 → {path or '(默认 workspace)'}]")
+
+    async def _open_working_dir_picker(self) -> None:
+        cur = None
+        for s in self._sessions_cache:
+            if s["id"] == self._current_session_id:
+                cur = s.get("working_dir") or ""
+                break
+
+        def _cb(new_path: str | None) -> None:
+            if new_path is None:
+                return
+            asyncio.create_task(self._set_working_dir(new_path))
+
+        await self.app.push_screen(WorkingDirPickerModal(cur or ""), _cb)
+
+    async def _set_session_model(self, model_id: str) -> None:
+        if self._current_session_id is None:
+            return
+        try:
+            r = await self.client.http.put(
+                f"/api/sessions/{self._current_session_id}/model",
+                json={"model": model_id},
+            )
+            r.raise_for_status()
+        except Exception as e:
+            await self._chat.add_error_message(f"设置会话模型失败：{e}")
+            return
+        for s in self._sessions_cache:
+            if s["id"] == self._current_session_id:
+                s["model"] = model_id
+                break
+        self._status.model = model_id
+        await self._chat.add_system_message(f"[本会话模型 → {model_id}]")
 
     async def _send_clipboard_image(self, prompt: str) -> None:
-        """/paste-img [附言] —— 从剪贴板拿图 + 可选文字，一并发送。"""
-        from ..imaging import paste_clipboard_image_bytes
-        data = paste_clipboard_image_bytes()
-        if not data:
+        """/paste-img [附言] —— 从剪贴板拿图 + 可选文字，一并发送。（保留兼容）"""
+        att = build_from_clipboard()
+        if att is None:
             await self._chat.add_error_message(
                 "剪贴板里没有图片，或未安装 pngpaste (macOS) / xclip (Linux)"
             )
             return
-        import base64
-        image_uri = "data:image/png;base64," + base64.b64encode(data).decode()
         text = prompt or "（剪贴板图片）"
         await self._chat.add_user_message(text)
         self._status.streaming = True
         try:
-            await self.client.send_message(text, images=[image_uri])
+            await self.client.send_message(text, images=[att.data_uri])
         except Exception as e:
             await self._chat.add_error_message(f"发送失败：{e}")
             self._status.streaming = False
+
+    async def on_paste_text_requested(self, evt: PasteTextRequested) -> None:
+        """输入区粘贴内容看起来像"多路径" → 转成附件；否则回填到输入框。"""
+        raw = evt.raw or ""
+        # 拆行 + 空格切；抓所有存在的文件路径
+        from pathlib import Path
+        candidates: list[str] = []
+        for line in raw.replace("\t", "\n").splitlines():
+            # 粗暴处理带空格的路径：先按空格切，逐段拼路径
+            # 简化：如果整行是一个存在的文件，就用；否则退回按空格切
+            line = line.strip().strip("'\"")
+            if not line:
+                continue
+            if Path(line).expanduser().is_file():
+                candidates.append(str(Path(line).expanduser()))
+                continue
+            for part in line.split():
+                part = part.strip("'\"")
+                if Path(part).expanduser().is_file():
+                    candidates.append(str(Path(part).expanduser()))
+
+        if not candidates:
+            # 交回给输入框做正常粘贴
+            self._input.insert(raw)
+            return
+
+        added: list[Attachment] = []
+        for p in candidates:
+            att = build_from_path(p)
+            if att is not None:
+                added.append(att)
+        if added:
+            self._attach.add_many(added)
+            await self._chat.add_system_message(f"[已通过粘贴追加 {len(added)} 个附件]")
+        else:
+            # 都不是可读文件，还回给输入框
+            self._input.insert(raw)
 
     async def on_session_selected(self, evt: SessionSelected) -> None:
         if evt.session_id == self._current_session_id:
@@ -472,6 +814,14 @@ class MainScreen(Screen):
             return
         await self.app.push_screen(SkillDetailModal(detail))
 
+    async def on_sub_agent_open_requested(self, evt: SubAgentOpenRequested) -> None:
+        try:
+            msgs = await self.client.get_messages(evt.session_id)
+        except Exception as e:
+            await self._chat.add_error_message(f"读取子任务失败：{e}")
+            return
+        await self.app.push_screen(SubAgentDetailModal(evt.task, msgs))
+
     async def on_mcp_reconnect_requested(self, evt: MCPReconnectRequested) -> None:
         try:
             await self.client.reconnect_mcp(evt.server_id)
@@ -518,13 +868,17 @@ class MainScreen(Screen):
         self.app.exit()
 
     def action_show_pane(self, pane: str) -> None:
-        if pane not in ("files", "todos", "skills", "mcp"):
+        if pane not in ("files", "todos", "skills", "mcp", "trusts", "tasks"):
             return
         self._right_pane = pane
         self._apply_pane_visibility()
-        # 切到 MCP 时懒加载一次
+        # 切到 MCP / Trusts / Tasks 时懒加载一次
         if pane == "mcp":
             asyncio.create_task(self._refresh_mcp())
+        elif pane == "trusts":
+            asyncio.create_task(self._refresh_trusts())
+        elif pane == "tasks":
+            asyncio.create_task(self._refresh_tasks())
 
     async def _refresh_mcp(self) -> None:
         try:
@@ -532,6 +886,64 @@ class MainScreen(Screen):
             self._mcp.set_servers(servers)
         except Exception as e:
             await self._chat.add_error_message(f"加载 MCP 列表失败：{e}")
+
+    async def _refresh_trusts(self) -> None:
+        if self._current_session_id is None:
+            return
+        try:
+            data = await self.client.get_trusts(self._current_session_id)
+            self._trusts.set_data(
+                data.get("paths") or [],
+                data.get("commands") or [],
+            )
+        except Exception as e:
+            await self._chat.add_error_message(f"加载信任列表失败：{e}")
+
+    async def _refresh_tasks(self) -> None:
+        try:
+            tasks = await self.client.list_tasks()
+            self._tasks.set_tasks(tasks)
+        except Exception as e:
+            await self._chat.add_error_message(f"加载定时任务失败：{e}")
+
+    async def on_trust_delete_requested(self, evt: TrustDeleteRequested) -> None:
+        if self._current_session_id is None:
+            return
+        try:
+            await self.client.delete_trust(self._current_session_id, evt.kind, evt.value)
+        except Exception as e:
+            await self._chat.add_error_message(f"删除信任项失败：{e}")
+            return
+        await self._refresh_trusts()
+
+    async def on_trusts_pane_refresh_requested(self, _evt: TrustsPaneRefreshRequested) -> None:
+        await self._refresh_trusts()
+
+    async def on_scheduler_toggle_requested(self, evt: SchedulerToggleRequested) -> None:
+        try:
+            await self.client.toggle_task(evt.task_id)
+        except Exception as e:
+            await self._chat.add_error_message(f"切换任务开关失败：{e}")
+            return
+        await self._refresh_tasks()
+
+    async def on_scheduler_run_now_requested(self, evt: SchedulerRunNowRequested) -> None:
+        try:
+            await self.client.run_task_now(evt.task_id)
+            await self._chat.add_system_message(f"[已触发任务 #{evt.task_id}]")
+        except Exception as e:
+            await self._chat.add_error_message(f"触发任务失败：{e}")
+
+    async def on_scheduler_delete_requested(self, evt: SchedulerDeleteRequested) -> None:
+        try:
+            await self.client.delete_task(evt.task_id)
+        except Exception as e:
+            await self._chat.add_error_message(f"删除任务失败：{e}")
+            return
+        await self._refresh_tasks()
+
+    async def on_scheduler_refresh_requested(self, _evt: SchedulerRefreshRequested) -> None:
+        await self._refresh_tasks()
 
     async def action_help(self) -> None:
         await self.app.push_screen(HelpModal())
@@ -547,7 +959,7 @@ class MainScreen(Screen):
         )
 
     async def action_open_settings(self) -> None:
-        """Ctrl-, 打开设置屏。"""
+        """Ctrl-K 打开设置屏。"""
         try:
             cfg = await self.client.get_config()
             models = await self.client.list_models()
@@ -556,12 +968,32 @@ class MainScreen(Screen):
             return
         current = cfg.get("model") or ""
 
-        def _cb(new_model: str | None) -> None:
-            if new_model and new_model != current:
-                asyncio.create_task(self._switch_model(new_model))
+        # 找当前会话的 model
+        session_model = None
+        for s in self._sessions_cache:
+            if s["id"] == self._current_session_id:
+                session_model = s.get("model")
+                break
+
+        def _cb(result: dict | None) -> None:
+            if not result:
+                return
+            model_id = result.get("model")
+            scope = result.get("scope") or "global"
+            if not model_id:
+                return
+            if scope == "session":
+                asyncio.create_task(self._set_session_model(model_id))
+            else:
+                asyncio.create_task(self._switch_model(model_id))
 
         await self.app.push_screen(
-            SettingsScreen(self.client, cfg, models, current), _cb,
+            SettingsScreen(
+                self.client, cfg, models, current,
+                session_model=session_model,
+                has_session=self._current_session_id is not None,
+            ),
+            _cb,
         )
 
     async def _switch_model(self, model_id: str) -> None:
@@ -584,3 +1016,31 @@ class MainScreen(Screen):
             )
         except Exception as e:
             await self._chat.add_error_message(f"切换 Plan Mode 失败：{e}")
+
+    def action_toggle_left(self) -> None:
+        self._left_hidden = not self._left_hidden
+        self.query_one("#left-pane").display = not self._left_hidden
+
+    async def action_open_cwd_picker(self) -> None:
+        await self._open_working_dir_picker()
+
+    def action_toggle_right(self) -> None:
+        self._right_hidden = not self._right_hidden
+        self.query_one("#right-pane").display = not self._right_hidden
+
+    def action_toggle_select_mode(self) -> None:
+        """F12 —— 关闭 Textual 鼠标捕获，让用户直接用终端选中复制。"""
+        self._select_mode = not self._select_mode
+        driver = getattr(self.app, "_driver", None)
+        if driver is None:
+            return
+        try:
+            if self._select_mode:
+                driver.disable_mouse_support()
+                self._status.hint = "SELECT MODE · 再按 F12 恢复"
+            else:
+                driver.enable_mouse_support()
+                self._status.hint = ""
+        except Exception:
+            # 某些老终端 driver 不实现这两个方法，忽略
+            self._status.hint = "此终端不支持选择模式切换"

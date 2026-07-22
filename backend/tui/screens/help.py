@@ -15,18 +15,28 @@ HELP_TEXT = """[b cyan]梦蝶 TUI 快捷键[/b cyan]
   [yellow]Ctrl-N[/yellow]      新建会话
   [yellow]Ctrl-P[/yellow]      Textual 内置命令面板（主题 / 快捷键 / 最大化等）
   [yellow]Ctrl-F[/yellow]      模糊搜索会话
-  [yellow]Ctrl-B[/yellow]      切换 Plan Mode（原 Ctrl-P）
-  [yellow]Ctrl-K[/yellow]      打开设置（切模型 / 看参数）
+  [yellow]Ctrl-B[/yellow]      切换 Plan Mode
+  [yellow]Ctrl-K[/yellow]      打开设置（切模型 · 支持"本会话/全局"作用范围）
+  [yellow]Ctrl-W[/yellow]      设置本会话工作目录
+  [yellow]Ctrl-\\[/yellow]      隐藏 / 显示左侧栏
+  [yellow]Ctrl-][/yellow]      隐藏 / 显示右侧栏
   [yellow]Ctrl-C[/yellow]      中断当前生成 / 空闲时退出
   [yellow]Ctrl-Q[/yellow]      退出
   [yellow]F2[/yellow]          聚焦到输入框
+  [yellow]F12[/yellow]         选择模式（关闭鼠标捕获，方便终端选中复制）
   [yellow]Escape[/yellow]      退出输入模式 / 关闭弹窗
 
 [b]右侧 pane 切换[/b]
-  [yellow]F3[/yellow]          文件树
-  [yellow]F4[/yellow]          Todos
-  [yellow]F5[/yellow]          Skills（Enter 看完整 SKILL.md）
-  [yellow]F6[/yellow]          MCP 服务器（Enter 重连 · t 开关）
+  [yellow]F3[/yellow]  文件  [yellow]F4[/yellow] Todos  [yellow]F5[/yellow] Skills
+  [yellow]F6[/yellow]  MCP  [yellow]F7[/yellow] 信任  [yellow]F8[/yellow] 定时任务
+
+[b]鼠标选中复制[/b]
+  多数终端可以直接绕过 TUI 的鼠标捕获做选中：
+    iTerm2 / Terminal.app   [yellow]Option + 拖动[/yellow]
+    kitty                   [yellow]Ctrl+Shift + 拖动[/yellow]
+    wezterm / Alacritty     [yellow]Shift + 拖动[/yellow]
+    gnome-terminal / VSCode [yellow]Shift + 拖动[/yellow]
+  或者按 [yellow]F12[/yellow] 进入 SELECT MODE 后直接选中；再按一次恢复。
 
 [b]会话列表（左侧）[/b]
   [yellow]j / k[/yellow]       上下移动
@@ -35,9 +45,11 @@ HELP_TEXT = """[b cyan]梦蝶 TUI 快捷键[/b cyan]
   [yellow]r[/yellow]           重命名当前会话（引导用 /rename 指令）
 
 [b]输入框[/b]
-  [yellow]Enter[/yellow]       发送消息
-  [yellow]Shift-Enter[/yellow] 换行
-  [yellow]@[/yellow]           触发文件选择器
+  [yellow]Enter[/yellow]                       发送消息
+  [yellow]Alt-Enter / Ctrl-J[/yellow]          换行（Shift-Enter 需终端配置）
+  [yellow]@[/yellow]                            触发文件选择器（Space 多选）
+  [yellow]/[/yellow]                            触发斜杠命令补全（↑/↓ 选择 · Tab/Enter 补全）
+  拖 / 粘贴多个文件路径进输入框 → 自动加入附件区
 
 [b]文件树[/b]
   [yellow]Enter[/yellow]       预览文件（图片走 iTerm2/kitty 内联渲染）
@@ -48,12 +60,24 @@ HELP_TEXT = """[b cyan]梦蝶 TUI 快捷键[/b cyan]
   [yellow]a[/yellow] 允许 · [yellow]d[/yellow] 拒绝 · [yellow]p[/yellow] 信任此目录 · [yellow]c[/yellow] 信任此命令
   [yellow]Enter[/yellow]=允许 · [yellow]Esc[/yellow]=拒绝
 
-[b]输入区特殊指令[/b]
-  [yellow]/rename 新标题[/yellow]   重命名当前会话
-  [yellow]/delete[/yellow]           删除当前会话（要 /delete confirm 二次确认）
-  [yellow]/paste-img [附言][/yellow]  从剪贴板拿图片发送（需 pngpaste/xclip）
-  [yellow]/allow <id>[/yellow]      命令行方式允许某个待确认工具
-  [yellow]/deny  <id>[/yellow]      命令行方式拒绝某个待确认工具
+[b]子任务卡片[/b]
+  焦点到 subagent 卡片上按 [yellow]Enter[/yellow] → 弹出该子任务完整消息流
+
+[b]附件区（InputArea 上方）[/b]
+  [yellow]Backspace[/yellow] 删末尾 · [yellow]Ctrl-Delete[/yellow] 清空
+
+[b]常用输入区指令[/b]
+  [yellow]/rename 新标题[/yellow]      重命名当前会话
+  [yellow]/delete[/yellow]              删除当前会话（要 /delete confirm 二次确认）
+  [yellow]/paste / /paste-img[/yellow]  剪贴板图片追加到附件区（不立即发送）
+  [yellow]/attach <glob>[/yellow]        批量附加本地文件（支持 ~ / 逗号分隔多 pattern）
+  [yellow]/attach-clear[/yellow]         清空附件区
+  [yellow]/cwd [路径][/yellow]           设置本会话工作目录（无参 → 打开选择器）
+  [yellow]/model [id][/yellow]           为本会话切换模型（无参 → 打开设置）
+  [yellow]/trusts[/yellow]               查看本会话已信任目录/命令
+  [yellow]/copy[/yellow]                 复制最新一条 assistant 内容到剪贴板
+  [yellow]/export[/yellow]               导出会话为 markdown（保存到 ~/mengdie-export-*.md）
+  [yellow]/allow <id> · /deny <id>[/yellow]  命令行方式回应工具确认
 
 [dim]按任意键或 Esc 关闭本窗口[/dim]
 """

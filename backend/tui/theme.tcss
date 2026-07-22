@@ -45,11 +45,28 @@ Screen {
     height: 1fr;
 }
 
-#center-pane InputArea {
+#input-container {
     dock: bottom;
     height: auto;
-    max-height: 12;
+    max-height: 22;
     margin: 0 1 1 1;
+}
+
+#input-container InputArea {
+    dock: none;
+    height: auto;
+    max-height: 12;
+    margin: 0;
+}
+
+#input-container AttachmentStrip {
+    dock: none;
+    margin: 0;
+}
+
+#input-container SlashPopup {
+    dock: none;
+    margin: 0;
 }
 
 #right-pane {

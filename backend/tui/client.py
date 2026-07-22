@@ -172,6 +172,51 @@ class MengdieClient:
         r = await self.http.post("/api/models/switch", json={"model_id": model_id})
         r.raise_for_status()
 
+    # ── Trusts ─────────────────────────────────────────
+
+    async def get_trusts(self, session_id: str) -> dict:
+        r = await self.http.get(f"/api/sessions/{session_id}/trusts")
+        r.raise_for_status()
+        return r.json()
+
+    async def delete_trust(self, session_id: str, kind: str, value: str) -> None:
+        r = await self.http.request(
+            "DELETE",
+            f"/api/sessions/{session_id}/trusts",
+            json={"kind": kind, "value": value},
+        )
+        r.raise_for_status()
+
+    # ── Scheduler tasks ────────────────────────────────
+
+    async def list_tasks(self) -> list[dict]:
+        r = await self.http.get("/api/tasks")
+        r.raise_for_status()
+        data = r.json()
+        return data.get("tasks") if isinstance(data, dict) else data
+
+    async def toggle_task(self, task_id: int) -> None:
+        # 后端没有专门 toggle，用 PUT enabled
+        cur = await self.http.get(f"/api/tasks")
+        cur.raise_for_status()
+        tasks = cur.json().get("tasks") or []
+        cur_enabled = False
+        for t in tasks:
+            if int(t.get("id", -1)) == int(task_id):
+                cur_enabled = bool(t.get("enabled"))
+                break
+        r = await self.http.put(f"/api/tasks/{task_id}",
+                                json={"enabled": not cur_enabled})
+        r.raise_for_status()
+
+    async def run_task_now(self, task_id: int) -> None:
+        r = await self.http.post(f"/api/tasks/{task_id}/run")
+        r.raise_for_status()
+
+    async def delete_task(self, task_id: int) -> None:
+        r = await self.http.delete(f"/api/tasks/{task_id}")
+        r.raise_for_status()
+
     # ── WebSocket ──────────────────────────────────────
 
     @property
