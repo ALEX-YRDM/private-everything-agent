@@ -11,10 +11,33 @@ class _PathResolver:
       - "free"      完全放开
       - "project"   相对路径必须落在 cwd 子树下，绝对路径同上
       - "workspace" 兼容旧行为：相对路径必须落在 cwd 子树下（此时 cwd = ./workspace）
+
+    额外允许根（_extra_allowed_roots）：即使 sandbox_mode 是 project/workspace，
+    如果路径落在这些根之一下也放行。用于放开 ~/.mengdie/skills/ 这类
+    "沙箱外但明确安全"的目录，让 Agent 通过 skill-creator 类 skill 直接
+    write_file 到 user skills 目录。
     """
 
-    @staticmethod
-    def resolve(path: str, ctx: ToolContext | None) -> Path:
+    _extra_allowed_roots: list[Path] = []
+
+    @classmethod
+    def add_allowed_root(cls, root: Path) -> None:
+        r = Path(root).expanduser().resolve()
+        if r not in cls._extra_allowed_roots:
+            cls._extra_allowed_roots.append(r)
+
+    @classmethod
+    def _is_under_allowed(cls, resolved: Path) -> bool:
+        for root in cls._extra_allowed_roots:
+            try:
+                resolved.relative_to(root)
+                return True
+            except ValueError:
+                continue
+        return False
+
+    @classmethod
+    def resolve(cls, path: str, ctx: ToolContext | None) -> Path:
         p = Path(path).expanduser()
         # 无 ctx 时不做任何限制（用于极少的启动期直接调用）
         if ctx is None:
@@ -30,9 +53,10 @@ class _PathResolver:
             try:
                 resolved.relative_to(root)
             except ValueError:
-                raise PermissionError(
-                    f"路径 '{path}' 超出当前工作目录 '{root}' 限制（sandbox_mode={ctx.sandbox_mode}）"
-                )
+                if not cls._is_under_allowed(resolved):
+                    raise PermissionError(
+                        f"路径 '{path}' 超出当前工作目录 '{root}' 限制（sandbox_mode={ctx.sandbox_mode}）"
+                    )
         return resolved
 
 
@@ -123,38 +147,50 @@ class EditFileTool(Tool):
 
 class ReadSkillTool(Tool):
     name = "read_skill"
-    description = "读取技能（Skill）的完整指导内容。用户技能优先于同名系统技能。"
+    description = (
+        "读取技能（Skill）的完整指导内容或其目录下的辅助文件。"
+        "用户技能（user tier）优先于同名内置技能（builtin tier）。"
+        "默认读 SKILL.md；可选 path 参数读同 skill 目录下的子文件（如 scripts/foo.sh、references/x.md）。"
+        "示例：{name:'skill-creator'} 或 {name:'skill-creator', path:'scripts/generate.py'}。"
+    )
     parameters = {
         "type": "object",
         "properties": {
             "name": {"type": "string", "description": "技能名称，与 available_skills 列表中的 name 一致"},
+            "path": {
+                "type": "string",
+                "description": "可选。skill 目录下的相对路径，如 'scripts/foo.sh'。缺省读 SKILL.md",
+            },
         },
         "required": ["name"],
     }
 
-    def __init__(self, workspace: Path):
-        self.workspace = workspace
-        self.cache_dir = workspace / ".skills_cache"
-        self.user_skills_dir = workspace / "skills"
+    def __init__(self, skills_loader):
+        # 通过 SkillsLoader 走 SkillIndex 统一查找，不再硬编码路径
+        self._skills = skills_loader
 
-    async def execute(self, name: str) -> str:
-        # 用户技能优先
-        user_path = self.user_skills_dir / name / "SKILL.md"
-        if user_path.exists():
-            return await asyncio.to_thread(user_path.read_text, encoding="utf-8")
+    async def execute(self, name: str, path: str | None = None) -> str:
+        info = self._skills.find(name)
+        if info is None:
+            available = [s.name for s in self._skills.list_all()]
+            hint = "、".join(sorted(set(available))) or "无"
+            return f"[错误] 技能 '{name}' 不存在。可用技能：{hint}"
 
-        # 系统技能缓存
-        cache_path = self.cache_dir / name / "SKILL.md"
-        if cache_path.exists():
-            return await asyncio.to_thread(cache_path.read_text, encoding="utf-8")
+        skill_dir = info.directory
+        if not path:
+            target = info.path  # SKILL.md
+        else:
+            target = (skill_dir / path).resolve()
+            try:
+                target.relative_to(skill_dir.resolve())
+            except ValueError:
+                return f"[错误] path 越出 skill 目录：{path}"
+            if not target.exists():
+                return f"[错误] skill '{name}' 下没有文件 '{path}'"
+            if not target.is_file():
+                return f"[错误] '{path}' 不是文件"
 
-        available: list[str] = []
-        if self.cache_dir.exists():
-            available += [d.name for d in self.cache_dir.iterdir() if d.is_dir()]
-        if self.user_skills_dir.exists():
-            available += [d.name for d in self.user_skills_dir.iterdir() if d.is_dir()]
-        hint = "、".join(sorted(set(available))) or "无"
-        return f"[错误] 技能 '{name}' 不存在。可用技能：{hint}"
+        return await asyncio.to_thread(target.read_text, encoding="utf-8")
 
 
 class ListDirTool(Tool):

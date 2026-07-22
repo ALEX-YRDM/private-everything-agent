@@ -24,6 +24,9 @@ def tmp_workspace(monkeypatch, tmp_path: Path) -> Path:
     skills = tmp_path / "skills"
     skills.mkdir()
 
+    user_skills = tmp_path / "user_skills"
+    user_skills.mkdir()
+
     data_dir = tmp_path / "data"
     data_dir.mkdir()
 
@@ -31,6 +34,7 @@ def tmp_workspace(monkeypatch, tmp_path: Path) -> Path:
     monkeypatch.setenv("WORKSPACE", str(ws))
     monkeypatch.setenv("CONFIG_DIR", str(cfg))
     monkeypatch.setenv("SKILLS_DIR", str(skills))
+    monkeypatch.setenv("USER_SKILLS_DIR", str(user_skills))
     monkeypatch.setenv("LLM__API_KEY", "test-fake-key")
 
     # database.DB_PATH 是模块级常量，直接 monkeypatch

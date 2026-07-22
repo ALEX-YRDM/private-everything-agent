@@ -701,11 +701,15 @@ class AgentLoop:
 
         session_manager = SessionManager(db_manager)
         memory_manager = MemoryManager(db_manager, config.llm.context_window_tokens)
-        system_skills_dir = Path(config.skills_dir).resolve()
-        user_skills_dir = workspace / "skills"
-        skills_loader = SkillsLoader(system_skills_dir, user_skills_dir)
-        # 启动时将系统 Skills 同步到 workspace/.skills_cache/，保持沙箱内访问
-        skills_loader.sync_system_skills(workspace)
+        builtin_skills_dir = Path(config.skills_dir).resolve()
+        # user_dir 由 SkillsLoader 从环境变量或 ~/.mengdie/skills/ 决定，无需手动传
+        skills_loader = SkillsLoader(builtin_skills_dir)
+        # 用户 skills 目录不存在时先建好，方便后续 install/create 直接写入
+        skills_loader.user_dir.mkdir(parents=True, exist_ok=True)
+        # user skills 目录属于沙箱外但"明确安全"的写入位置：
+        # Agent 通过 skill-creator 类 skill 直接 write_file 时不应被沙箱挡下
+        from ..tools.filesystem import _PathResolver
+        _PathResolver.add_allowed_root(skills_loader.user_dir)
         context_builder = ContextBuilder(workspace, config_dir, skills_loader, memory_manager, db_manager)
 
         tools = ToolRegistry()
@@ -714,7 +718,7 @@ class AgentLoop:
         tools.register(WriteFileTool())
         tools.register(EditFileTool())
         tools.register(ListDirTool())
-        tools.register(ReadSkillTool(workspace))
+        tools.register(ReadSkillTool(skills_loader))
         # 编码工具集（glob/grep/multi_edit/apply_patch）
         tools.register(GlobTool())
         tools.register(GrepTool())
