@@ -4,13 +4,25 @@
 - 内部收集 subagent_event（thinking / tool_call / tool_result /
   content_delta）追加到 RichLog
 - subagent_done 收到后展示最终结果
+- 支持 focus + Enter → 弹出完整详情
 """
 from __future__ import annotations
 
 import json
 from typing import Any
 
+from textual.binding import Binding
+from textual.message import Message
 from textual.widgets import RichLog
+
+
+class SubAgentOpenRequested(Message):
+    """请求打开该 subagent 的完整详情。"""
+
+    def __init__(self, session_id: str, task: str) -> None:
+        super().__init__()
+        self.session_id = session_id
+        self.task = task
 
 
 class SubAgentBlock(RichLog):
@@ -25,9 +37,16 @@ class SubAgentBlock(RichLog):
         background: transparent;
         border: round $secondary 60%;
     }
+    SubAgentBlock:focus { border: heavy $accent; }
     SubAgentBlock.-done   { border: round green 60%; }
     SubAgentBlock.-error  { border: round red 60%; }
     """
+
+    BINDINGS = [
+        Binding("enter", "open_detail", "查看详情", show=False),
+    ]
+
+    can_focus = True
 
     def __init__(self, subagent_id: str, task: str, session_id: str | None = None):
         super().__init__(markup=True, wrap=True, highlight=False, auto_scroll=False)
@@ -40,9 +59,13 @@ class SubAgentBlock(RichLog):
     def _header(self) -> None:
         safe = str(self.task).replace("[", r"\[")
         preview = safe[:60] + ("…" if len(safe) > 60 else "")
-        self.write(f"[cyan bold]▸ subagent[/cyan bold] [dim]({self.subagent_id[:8]})[/dim]")
+        self.write(f"[cyan bold]▸ subagent[/cyan bold] [dim]({self.subagent_id[:8]})  ↵ 查看全部[/dim]")
         self.write(f"[dim]任务：[/dim]{preview}")
         self.write("")
+
+    def action_open_detail(self) -> None:
+        if self.session_id:
+            self.post_message(SubAgentOpenRequested(self.session_id, self.task))
 
     def apply_event(self, evt: dict[str, Any]) -> None:
         """吃一个 subagent_event.event 内部事件。"""
