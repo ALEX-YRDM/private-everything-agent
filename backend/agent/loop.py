@@ -11,28 +11,7 @@ from ..session.manager import SessionManager
 from .confirmer import ConfirmationBroker
 from .context import ContextBuilder
 from .memory import MemoryManager
-
-
-_THINK_RE = _re.compile(r"<think>.*?</think>", _re.DOTALL | _re.IGNORECASE)
-_THINK_OPEN_RE = _re.compile(r"<think>.*", _re.DOTALL | _re.IGNORECASE)
-
-
-def _strip_think_tags(text: str) -> str:
-    """
-    剥掉部分模型（DeepSeek-R1、GLM-Z1 等）写在 content 里的 <think>...</think> 块。
-    - 完整成对的直接删；
-    - 只有开标签没有闭标签（截断/未收尾）时，从 <think> 开始到末尾全丢；
-    - 也兼容裸露的 </think>（去掉）。
-    """
-    if not text:
-        return text
-    low = text.lower()
-    if "<think>" not in low and "</think>" not in low:
-        return text
-    stripped = _THINK_RE.sub("", text)
-    stripped = _THINK_OPEN_RE.sub("", stripped)
-    stripped = _re.sub(r"</think>", "", stripped, flags=_re.IGNORECASE)
-    return stripped.strip()
+from .text_utils import strip_think_tags as _strip_think_tags  # noqa: F401（向后兼容）
 
 
 class AgentLoop:

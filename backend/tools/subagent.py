@@ -12,6 +12,7 @@ import asyncio
 import json
 from loguru import logger
 from .base import StreamingTool
+from ..agent.text_utils import strip_think_tags
 
 
 class SpawnSubAgentsTool(StreamingTool):
@@ -124,6 +125,10 @@ class SpawnSubAgentsTool(StreamingTool):
                     })
                     if event.get("type") == "done":
                         result = event.get("content") or ""
+
+                # 剥掉 <think>...</think>（某些模型会把推理写进 content），
+                # 避免主 Agent 的消息历史里被 sub 的推理污染
+                result = strip_think_tags(result)
 
                 stream_callback({
                     "type": "subagent_done",
